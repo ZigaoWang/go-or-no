@@ -12,6 +12,7 @@ import VisionKit
 
 struct ContentView: View {
     @StateObject private var viewModel = CameraViewModel()
+    @State private var autoSpeakEnabled = true
     
     var body: some View {
         ZStack {
@@ -19,17 +20,51 @@ struct ContentView: View {
             CameraView(session: viewModel.session)
                 .edgesIgnoringSafeArea(.all)
             
-        VStack {
+            VStack {
+                // Settings toggle at the top
+                HStack {
+                    Toggle("Auto-Speak", isOn: $autoSpeakEnabled)
+                        .padding()
+                        .background(Color.black.opacity(0.6))
+                        .cornerRadius(12)
+                        .foregroundColor(.white)
+                        .accessibilityHint("Toggle automatic voice announcements")
+                        .onChange(of: autoSpeakEnabled) { newValue in
+                            viewModel.setAutoSpeak(enabled: newValue)
+                        }
+                    
+                    Spacer()
+                }
+                .padding(.top, 60)
+                .padding(.horizontal)
+                
                 Spacer()
                 
                 // Display detected objects and decision
                 VStack(spacing: 20) {
-                    Text(viewModel.decision)
-                        .font(.system(size: 72, weight: .bold))
-                        .foregroundColor(viewModel.decision == "GO" ? .green : .red)
-                        .padding()
-                        .background(Color.black.opacity(0.6))
-                        .cornerRadius(12)
+                    HStack(spacing: 30) {
+                        if viewModel.showLeftDirection {
+                            Image(systemName: "arrow.left")
+                                .font(.system(size: 60))
+                                .foregroundColor(.yellow)
+                                .accessibilityLabel("Turn left")
+                        }
+                        
+                        Text(viewModel.decision)
+                            .font(.system(size: 72, weight: .bold))
+                            .foregroundColor(viewModel.decision == "GO" ? .green : .red)
+                            .accessibilityLabel("\(viewModel.decision)")
+                        
+                        if viewModel.showRightDirection {
+                            Image(systemName: "arrow.right")
+                                .font(.system(size: 60))
+                                .foregroundColor(.yellow)
+                                .accessibilityLabel("Turn right")
+                        }
+                    }
+                    .padding()
+                    .background(Color.black.opacity(0.6))
+                    .cornerRadius(12)
                     
                     Text(viewModel.detectionDescription)
                         .font(.title2)
@@ -38,24 +73,53 @@ struct ContentView: View {
                         .padding()
                         .background(Color.black.opacity(0.6))
                         .cornerRadius(12)
+                        .accessibilityLabel(viewModel.detectionDescription)
                 }
                 .padding(.bottom, 50)
+                .accessibilityElement(children: .combine)
                 
-                Button(action: {
-                    viewModel.speakFeedback()
-                }) {
-                    Image(systemName: "speaker.wave.2.fill")
-                        .font(.system(size: 30))
+                // Large buttons for manual control
+                HStack(spacing: 40) {
+                    Button(action: {
+                        viewModel.speakFeedback()
+                    }) {
+                        VStack {
+                            Image(systemName: "speaker.wave.2.fill")
+                                .font(.system(size: 30))
+                            Text("Speak")
+                                .font(.headline)
+                        }
                         .padding()
+                        .frame(width: 100, height: 100)
                         .background(Color.white)
                         .foregroundColor(.blue)
                         .clipShape(Circle())
+                    }
+                    .accessibilityLabel("Speak current status")
+                    
+                    Button(action: {
+                        viewModel.toggleWalkingMode()
+                    }) {
+                        VStack {
+                            Image(systemName: viewModel.isWalkingMode ? "figure.walk.circle.fill" : "figure.walk.circle")
+                                .font(.system(size: 30))
+                            Text(viewModel.isWalkingMode ? "Walking" : "Standing")
+                                .font(.headline)
+                        }
+                        .padding()
+                        .frame(width: 100, height: 100)
+                        .background(Color.white)
+                        .foregroundColor(.blue)
+                        .clipShape(Circle())
+                    }
+                    .accessibilityLabel(viewModel.isWalkingMode ? "Switch to standing mode" : "Switch to walking mode")
                 }
-                .padding(.bottom, 30)
+                .padding(.bottom, 50)
             }
         }
         .onAppear {
             viewModel.checkPermissionsAndStartSession()
+            viewModel.setAutoSpeak(enabled: autoSpeakEnabled)
         }
     }
 }
@@ -78,6 +142,9 @@ struct CameraView: UIViewRepresentable {
 class CameraViewModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     @Published var decision: String = "..."
     @Published var detectionDescription: String = "Analyzing..."
+    @Published var showLeftDirection: Bool = false
+    @Published var showRightDirection: Bool = false
+    @Published var isWalkingMode: Bool = false
     
     let session = AVCaptureSession()
     private let videoOutput = AVCaptureVideoDataOutput()
@@ -85,6 +152,8 @@ class CameraViewModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSampl
     
     private var lastSpokenTime: Date = Date()
     private var lastProcessTime: Date = Date()
+    private var autoSpeakEnabled: Bool = true
+    private var lastDecision: String = ""
     
     override init() {
         super.init()
@@ -106,6 +175,20 @@ class CameraViewModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSampl
         default:
             break
         }
+    }
+    
+    func setAutoSpeak(enabled: Bool) {
+        autoSpeakEnabled = enabled
+    }
+    
+    func toggleWalkingMode() {
+        isWalkingMode.toggle()
+        
+        // Announce mode change
+        let utterance = AVSpeechUtterance(string: isWalkingMode ? "Walking mode activated" : "Standing mode activated")
+        utterance.rate = 0.5
+        utterance.volume = 1.0
+        synthesizer.speak(utterance)
     }
     
     private func setupSession() {
@@ -178,9 +261,13 @@ class CameraViewModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSampl
     private var detectedObstacles = false
     private var detectedHumans = false
     private var detectedText: [String] = []
+    private var obstaclePositions: [CGPoint] = []
     
     private func handleObjectDetection(request: VNRequest, error: Error?) {
         guard let results = request.results as? [VNRectangleObservation] else { return }
+        
+        // Store obstacle positions to determine direction
+        obstaclePositions = results.map { CGPoint(x: $0.boundingBox.midX, y: $0.boundingBox.midY) }
         
         // Consider objects in the center or taking up significant space as obstacles
         let significantObstacles = results.filter { observation in
@@ -222,28 +309,72 @@ class CameraViewModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSampl
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             
+            // Determine direction guidance based on obstacle positions
+            self.showLeftDirection = false
+            self.showRightDirection = false
+            
+            let oldDecision = self.decision
+            
             if self.detectedHumans {
                 self.decision = "NO"
-                self.detectionDescription = "Caution: Person detected"
+                self.detectionDescription = "Caution: Person ahead"
             } else if self.detectedObstacles {
                 self.decision = "NO"
-                self.detectionDescription = "Caution: Obstacle in path"
+                
+                // Calculate which direction has fewer obstacles for guidance
+                if !self.obstaclePositions.isEmpty {
+                    let leftSideObstacles = self.obstaclePositions.filter { $0.x < 0.5 }.count
+                    let rightSideObstacles = self.obstaclePositions.filter { $0.x >= 0.5 }.count
+                    
+                    if leftSideObstacles > rightSideObstacles {
+                        self.showRightDirection = true
+                        self.detectionDescription = "Obstacle ahead. Try right."
+                    } else if rightSideObstacles > leftSideObstacles {
+                        self.showLeftDirection = true
+                        self.detectionDescription = "Obstacle ahead. Try left."
+                    } else {
+                        self.detectionDescription = "Obstacle in path"
+                    }
+                } else {
+                    self.detectionDescription = "Obstacle in path"
+                }
             } else {
                 self.decision = "GO"
                 
-                if !self.detectedText.isEmpty {
-                    // Just mention the first 1-2 text items if present
-                    let textSummary = Array(self.detectedText.prefix(2)).joined(separator: ", ")
-                    self.detectionDescription = "Path clear. Text visible: \(textSummary)"
+                if !self.detectedText.isEmpty && self.isWalkingMode {
+                    // Just mention the first text item if present during walking
+                    let firstText = self.detectedText.first ?? ""
+                    if firstText.count < 15 { // Only mention short text
+                        self.detectionDescription = "Path clear. \(firstText) ahead."
+                    } else {
+                        self.detectionDescription = "Path clear."
+                    }
                 } else {
                     self.detectionDescription = "Path clear"
                 }
+            }
+            
+            // Speak automatically if enabled and decision changed
+            let now = Date()
+            if self.autoSpeakEnabled && 
+               (self.decision != oldDecision || now.timeIntervalSince(self.lastSpokenTime) > 5.0) && 
+               oldDecision != "..." { // Don't speak the initial state
+                self.speakFeedback()
             }
         }
     }
     
     func speakFeedback() {
-        let utterance = AVSpeechUtterance(string: "\(decision). \(detectionDescription)")
+        var speechText = "\(decision). \(detectionDescription)"
+        
+        // Add direction to speech if needed
+        if showLeftDirection {
+            speechText += " Turn left."
+        } else if showRightDirection {
+            speechText += " Turn right."
+        }
+        
+        let utterance = AVSpeechUtterance(string: speechText)
         utterance.rate = 0.5
         utterance.volume = 1.0
         utterance.voice = AVSpeechSynthesisVoice(language: "en-US")
