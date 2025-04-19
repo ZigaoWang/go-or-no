@@ -9,166 +9,102 @@ import SwiftUI
 import AVFoundation
 import Vision
 import VisionKit
+import ARKit
+import UIKit
 
 struct ContentView: View {
     @StateObject private var viewModel = CameraViewModel()
-    @State private var autoSpeakEnabled = true
     
     var body: some View {
         ZStack {
             // Camera feed
-            CameraView(session: viewModel.session)
+            ARCameraView(session: viewModel.arSession)
                 .edgesIgnoringSafeArea(.all)
             
             VStack {
-                // Settings toggle at the top
-                HStack {
-                    Toggle("Auto-Speak", isOn: $autoSpeakEnabled)
+                Spacer()
+                
+                // Distance indicator
+                VStack {
+                    Text("Distance: \(String(format: "%.2f", viewModel.currentDistance)) m")
+                        .font(.system(size: 42, weight: .bold))
+                        .foregroundColor(.white)
                         .padding()
                         .background(Color.black.opacity(0.6))
                         .cornerRadius(12)
-                        .foregroundColor(.white)
-                        .accessibilityHint("Toggle automatic voice announcements")
-                        .onChange(of: autoSpeakEnabled) { newValue in
-                            viewModel.setAutoSpeak(enabled: newValue)
-                        }
-                    
-                    Spacer()
                 }
-                .padding(.top, 60)
-                .padding(.horizontal)
+                .padding(.bottom, 50)
+                
+                // Target indicator in center
+                Image(systemName: "target")
+                    .font(.system(size: 50))
+                    .foregroundColor(.red.opacity(0.7))
                 
                 Spacer()
                 
-                // Display detected objects and decision
-                VStack(spacing: 20) {
-                    HStack(spacing: 30) {
-                        if viewModel.showLeftDirection {
-                            Image(systemName: "arrow.left")
-                                .font(.system(size: 60))
-                                .foregroundColor(.yellow)
-                                .accessibilityLabel("Turn left")
-                        }
-                        
-                        Text(viewModel.decision)
-                            .font(.system(size: 72, weight: .bold))
-                            .foregroundColor(viewModel.decision == "GO" ? .green : .red)
-                            .accessibilityLabel("\(viewModel.decision)")
-                        
-                        if viewModel.showRightDirection {
-                            Image(systemName: "arrow.right")
-                                .font(.system(size: 60))
-                                .foregroundColor(.yellow)
-                                .accessibilityLabel("Turn right")
-                        }
-                    }
-                    .padding()
-                    .background(Color.black.opacity(0.6))
-                    .cornerRadius(12)
-                    
-                    Text(viewModel.detectionDescription)
-                        .font(.title2)
-                        .multilineTextAlignment(.center)
-                        .foregroundColor(.white)
-                        .padding()
-                        .background(Color.black.opacity(0.6))
-                        .cornerRadius(12)
-                        .accessibilityLabel(viewModel.detectionDescription)
-                }
-                .padding(.bottom, 50)
-                .accessibilityElement(children: .combine)
-                
-                // Large buttons for manual control
-                HStack(spacing: 40) {
                     Button(action: {
-                        viewModel.speakFeedback()
+                    viewModel.toggleVibration()
                     }) {
                         VStack {
-                            Image(systemName: "speaker.wave.2.fill")
+                        Image(systemName: viewModel.vibrationEnabled ? "iphone.radiowaves.left.and.right" : "iphone.slash")
                                 .font(.system(size: 30))
-                            Text("Speak")
+                        Text(viewModel.vibrationEnabled ? "Vibration ON" : "Vibration OFF")
                                 .font(.headline)
                         }
                         .padding()
-                        .frame(width: 100, height: 100)
+                    .frame(width: 200, height: 100)
                         .background(Color.white)
                         .foregroundColor(.blue)
-                        .clipShape(Circle())
-                    }
-                    .accessibilityLabel("Speak current status")
-                    
-                    Button(action: {
-                        viewModel.toggleWalkingMode()
-                    }) {
-                        VStack {
-                            Image(systemName: viewModel.isWalkingMode ? "figure.walk.circle.fill" : "figure.walk.circle")
-                                .font(.system(size: 30))
-                            Text(viewModel.isWalkingMode ? "Walking" : "Standing")
-                                .font(.headline)
-                        }
-                        .padding()
-                        .frame(width: 100, height: 100)
-                        .background(Color.white)
-                        .foregroundColor(.blue)
-                        .clipShape(Circle())
-                    }
-                    .accessibilityLabel(viewModel.isWalkingMode ? "Switch to standing mode" : "Switch to walking mode")
+                    .cornerRadius(20)
                 }
                 .padding(.bottom, 50)
             }
         }
         .onAppear {
             viewModel.checkPermissionsAndStartSession()
-            viewModel.setAutoSpeak(enabled: autoSpeakEnabled)
         }
     }
 }
 
-struct CameraView: UIViewRepresentable {
-    let session: AVCaptureSession
+struct ARCameraView: UIViewRepresentable {
+    let session: ARSession
     
     func makeUIView(context: Context) -> UIView {
-        let view = UIView(frame: UIScreen.main.bounds)
-        let previewLayer = AVCaptureVideoPreviewLayer(session: session)
-        previewLayer.frame = view.frame
-        previewLayer.videoGravity = .resizeAspectFill
-        view.layer.addSublayer(previewLayer)
+        let view = ARSCNView(frame: UIScreen.main.bounds)
+        view.session = session
+        view.automaticallyUpdatesLighting = true
         return view
     }
     
     func updateUIView(_ uiView: UIView, context: Context) {}
 }
 
-class CameraViewModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSampleBufferDelegate {
-    @Published var decision: String = "..."
-    @Published var detectionDescription: String = "Analyzing..."
-    @Published var showLeftDirection: Bool = false
-    @Published var showRightDirection: Bool = false
-    @Published var isWalkingMode: Bool = false
+class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
+    @Published var currentDistance: Double = 0.0
+    @Published var vibrationEnabled: Bool = true
     
-    let session = AVCaptureSession()
-    private let videoOutput = AVCaptureVideoDataOutput()
-    private let synthesizer = AVSpeechSynthesizer()
-    
-    private var lastSpokenTime: Date = Date()
-    private var lastProcessTime: Date = Date()
-    private var autoSpeakEnabled: Bool = true
-    private var lastDecision: String = ""
+    let arSession = ARSession()
+    private var timer: Timer? = nil
+    private let feedbackGenerator = UIImpactFeedbackGenerator(style: .medium)
     
     override init() {
         super.init()
-        setupSession()
+        setupARSession()
+    }
+    
+    func setupARSession() {
+        arSession.delegate = self
     }
     
     func checkPermissionsAndStartSession() {
         switch AVCaptureDevice.authorizationStatus(for: .video) {
         case .authorized:
-            startSession()
+            startARSession()
         case .notDetermined:
             AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
                 if granted {
                     DispatchQueue.main.async {
-                        self?.startSession()
+                        self?.startARSession()
                     }
                 }
             }
@@ -177,210 +113,129 @@ class CameraViewModel: NSObject, ObservableObject, AVCaptureVideoDataOutputSampl
         }
     }
     
-    func setAutoSpeak(enabled: Bool) {
-        autoSpeakEnabled = enabled
+    func startARSession() {
+        let configuration = ARWorldTrackingConfiguration()
+        if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
+            configuration.frameSemantics = .sceneDepth
+        }
+        
+        arSession.run(configuration)
+        
+        // Start vibration timer
+        startVibrationFeedback()
     }
     
-    func toggleWalkingMode() {
-        isWalkingMode.toggle()
-        
-        // Announce mode change
-        let utterance = AVSpeechUtterance(string: isWalkingMode ? "Walking mode activated" : "Standing mode activated")
-        utterance.rate = 0.5
-        utterance.volume = 1.0
-        synthesizer.speak(utterance)
-    }
-    
-    private func setupSession() {
-        guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) else { return }
-        
-        do {
-            let input = try AVCaptureDeviceInput(device: device)
-            if session.canAddInput(input) {
-                session.addInput(input)
-            }
-            
-            videoOutput.setSampleBufferDelegate(self, queue: DispatchQueue(label: "videoQueue"))
-            if session.canAddOutput(videoOutput) {
-                session.addOutput(videoOutput)
-            }
-            
-            // Configure for high frame rate if possible
-            if device.activeFormat.videoSupportedFrameRateRanges.first?.maxFrameRate ?? 0 > 30 {
-                try device.lockForConfiguration()
-                device.activeVideoMinFrameDuration = CMTime(value: 1, timescale: 60)
-                device.unlockForConfiguration()
-            }
-        } catch {
-            print("Error setting up camera: \(error)")
+    func toggleVibration() {
+        vibrationEnabled.toggle()
+        if vibrationEnabled {
+            startVibrationFeedback()
+        } else {
+            stopVibrationFeedback()
         }
     }
     
-    func startSession() {
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            self?.session.startRunning()
-        }
-    }
-    
-    func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
-        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+    private func startVibrationFeedback() {
+        feedbackGenerator.prepare()
         
-        // Process every 0.3 seconds for better performance
-        let now = Date()
-        if now.timeIntervalSince(lastProcessTime) < 0.3 {
-            return
-        }
-        lastProcessTime = now
-        
-        // Perform multiple vision tasks in parallel for better scene understanding
-        performVisionAnalysis(on: pixelBuffer)
-    }
-    
-    private func performVisionAnalysis(on pixelBuffer: CVPixelBuffer) {
-        // Create a handler for the current frame
-        let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, options: [:])
-        
-        // Create various vision requests
-        let objectDetectionRequest = VNDetectRectanglesRequest(completionHandler: handleObjectDetection)
-        let humanDetectionRequest = VNDetectHumanRectanglesRequest(completionHandler: handleHumanDetection)
-        let textDetectionRequest = VNRecognizeTextRequest(completionHandler: handleTextDetection)
-        
-        // Set up the requests
-        objectDetectionRequest.minimumAspectRatio = 0.3
-        objectDetectionRequest.maximumAspectRatio = 0.9
-        objectDetectionRequest.minimumSize = 0.1
-        objectDetectionRequest.maximumObservations = 10
-        
-        textDetectionRequest.recognitionLevel = .accurate
-        textDetectionRequest.usesLanguageCorrection = true
-        
-        // Perform the requests in parallel
-        try? handler.perform([objectDetectionRequest, humanDetectionRequest, textDetectionRequest])
-    }
-    
-    private var detectedObstacles = false
-    private var detectedHumans = false
-    private var detectedText: [String] = []
-    private var obstaclePositions: [CGPoint] = []
-    
-    private func handleObjectDetection(request: VNRequest, error: Error?) {
-        guard let results = request.results as? [VNRectangleObservation] else { return }
-        
-        // Store obstacle positions to determine direction
-        obstaclePositions = results.map { CGPoint(x: $0.boundingBox.midX, y: $0.boundingBox.midY) }
-        
-        // Consider objects in the center or taking up significant space as obstacles
-        let significantObstacles = results.filter { observation in
-            let centerX = observation.boundingBox.midX
-            let centerY = observation.boundingBox.midY
-            let area = observation.boundingBox.width * observation.boundingBox.height
+        // Increase the timer frequency for maximum responsiveness
+        timer = Timer.scheduledTimer(withTimeInterval: 0.02, repeats: true) { [weak self] _ in // Increased timer speed to 50Hz
+            guard let self = self, self.vibrationEnabled else { return }
             
-            // Object is in center path or large
-            return (centerX > 0.3 && centerX < 0.7 && centerY > 0.3) || area > 0.15
-        }
-        
-        detectedObstacles = !significantObstacles.isEmpty
-        updateDecision()
-    }
-    
-    private func handleHumanDetection(request: VNRequest, error: Error?) {
-        guard let results = request.results as? [VNHumanObservation] else { return }
-        
-        detectedHumans = !results.isEmpty
-        updateDecision()
-    }
-    
-    private func handleTextDetection(request: VNRequest, error: Error?) {
-        guard let results = request.results as? [VNRecognizedTextObservation] else { return }
-        
-        let recognizedStrings = results.compactMap { observation -> String? in
-            return observation.topCandidates(1).first?.string
-        }
-        
-        if !recognizedStrings.isEmpty {
-            detectedText = recognizedStrings
-        }
-        
-        updateDecision()
-    }
-    
-    private func updateDecision() {
-        // Combine all detection results to make a decision
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
+            // Calculate interval based on distance
+            let distance = self.currentDistance
             
-            // Determine direction guidance based on obstacle positions
-            self.showLeftDirection = false
-            self.showRightDirection = false
-            
-            let oldDecision = self.decision
-            
-            if self.detectedHumans {
-                self.decision = "NO"
-                self.detectionDescription = "Caution: Person ahead"
-            } else if self.detectedObstacles {
-                self.decision = "NO"
+            // Only vibrate if we have a valid distance measurement
+            if distance > 0 {
+                let interval = self.calculateVibrationInterval(for: distance)
                 
-                // Calculate which direction has fewer obstacles for guidance
-                if !self.obstaclePositions.isEmpty {
-                    let leftSideObstacles = self.obstaclePositions.filter { $0.x < 0.5 }.count
-                    let rightSideObstacles = self.obstaclePositions.filter { $0.x >= 0.5 }.count
-                    
-                    if leftSideObstacles > rightSideObstacles {
-                        self.showRightDirection = true
-                        self.detectionDescription = "Obstacle ahead. Try right."
-                    } else if rightSideObstacles > leftSideObstacles {
-                        self.showLeftDirection = true
-                        self.detectionDescription = "Obstacle ahead. Try left."
-                    } else {
-                        self.detectionDescription = "Obstacle in path"
-                    }
+                // Check if we should vibrate this cycle - avoid division by zero
+                if interval <= 0.03 {
+                    // For very close objects, vibrate every cycle or very close
+                    self.feedbackGenerator.impactOccurred()
+                    self.feedbackGenerator.prepare()
                 } else {
-                    self.detectionDescription = "Obstacle in path"
-                }
-            } else {
-                self.decision = "GO"
-                
-                if !self.detectedText.isEmpty && self.isWalkingMode {
-                    // Just mention the first text item if present during walking
-                    let firstText = self.detectedText.first ?? ""
-                    if firstText.count < 15 { // Only mention short text
-                        self.detectionDescription = "Path clear. \(firstText) ahead."
-                    } else {
-                        self.detectionDescription = "Path clear."
+                    let currentTime = Date().timeIntervalSince1970
+                    // Adjust multiplier for 50Hz timer
+                    if Int(currentTime * 50) % max(Int(interval * 50), 1) == 0 {
+                        self.feedbackGenerator.impactOccurred()
+                        self.feedbackGenerator.prepare() // Prepare for next vibration
                     }
-                } else {
-                    self.detectionDescription = "Path clear"
                 }
             }
-            
-            // Speak automatically if enabled and decision changed
-            let now = Date()
-            if self.autoSpeakEnabled && 
-               (self.decision != oldDecision || now.timeIntervalSince(self.lastSpokenTime) > 5.0) && 
-               oldDecision != "..." { // Don't speak the initial state
-                self.speakFeedback()
+        }
+    }
+    
+    private func stopVibrationFeedback() {
+        timer?.invalidate()
+        timer = nil
+    }
+    
+    private func calculateVibrationInterval(for distance: Double) -> Double {
+        // Maximize sensitivity: Reach MAX frequency at 0.8m due to LiDAR inaccuracy
+        let clampedDistance = min(max(distance, 0.1), 8.0)
+
+        // Maximum vibration frequency at 0.8m and below
+        if clampedDistance <= 0.8 {
+            // Near-constant, maximum vibration frequency
+            // <= 0.8m -> 0.015s (66 vibrations per second)
+            return 0.015
+        } else if clampedDistance <= 1.5 {
+            // Rapidly decrease frequency from max at 0.8m to still high at 1.5m
+            // 0.8m -> 0.015s (66 vibrations per second)
+            // 1.5m -> 0.1s (10 vibrations per second)
+            return 0.015 + (clampedDistance - 0.8) * (0.1 - 0.015) / (1.5 - 0.8)
+        } else {
+            // Gradually decrease frequency for farther distances
+            // 1.5m -> 0.1s (10 vibrations per second)
+            // 8.0m -> 1.0s (1 vibration per second)
+            return 0.1 + (clampedDistance - 1.5) * (1.0 - 0.1) / (8.0 - 1.5)
+        }
+    }
+    
+    func session(_ session: ARSession, didUpdate frame: ARFrame) {
+        // Check if depth data is available
+        guard let depthData = frame.sceneDepth else { return }
+        
+        // Get the depth at the center of the frame
+        let width = CVPixelBufferGetWidth(depthData.depthMap)
+        let height = CVPixelBufferGetHeight(depthData.depthMap)
+        let centerX = width / 2
+        let centerY = height / 2
+        
+        if let depth = getDepthFromBuffer(depthData.depthMap, atPoint: (centerX, centerY)) {
+            DispatchQueue.main.async {
+                self.currentDistance = depth
             }
         }
     }
     
-    func speakFeedback() {
-        var speechText = "\(decision). \(detectionDescription)"
+    private func getDepthFromBuffer(_ depthMap: CVPixelBuffer, atPoint point: (Int, Int)) -> Double? {
+        CVPixelBufferLockBaseAddress(depthMap, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(depthMap, .readOnly) }
         
-        // Add direction to speech if needed
-        if showLeftDirection {
-            speechText += " Turn left."
-        } else if showRightDirection {
-            speechText += " Turn right."
+        // Get buffer dimensions
+        let width = CVPixelBufferGetWidth(depthMap)
+        let height = CVPixelBufferGetHeight(depthMap)
+        
+        // Ensure point is within bounds
+        guard point.0 >= 0, point.0 < width, point.1 >= 0, point.1 < height else {
+            return nil
         }
         
-        let utterance = AVSpeechUtterance(string: speechText)
-        utterance.rate = 0.5
-        utterance.volume = 1.0
-        utterance.voice = AVSpeechSynthesisVoice(language: "en-US")
+        // Get a pointer to the depth data
+        let baseAddress = CVPixelBufferGetBaseAddress(depthMap)
+        let bytesPerRow = CVPixelBufferGetBytesPerRow(depthMap)
+        let depthPointer = baseAddress!.advanced(by: point.1 * bytesPerRow + point.0 * MemoryLayout<Float32>.size).assumingMemoryBound(to: Float32.self)
         
-        synthesizer.speak(utterance)
-        lastSpokenTime = Date()
+        // Get the depth value (in meters)
+        let depth = Double(depthPointer.pointee)
+        
+        // Return nil if depth is invalid (0 or infinity)
+        guard depth > 0, depth.isFinite else {
+            return nil
+        }
+        
+        return depth
     }
 }
 
