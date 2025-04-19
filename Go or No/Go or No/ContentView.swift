@@ -41,21 +41,39 @@ struct ContentView: View {
                     .foregroundColor(.red.opacity(0.7))
                 
                 Spacer()
-                
+
+                HStack(spacing: 20) { // Group toggles together
                     Button(action: {
-                    viewModel.toggleVibration()
+                        viewModel.toggleVibration()
                     }) {
                         VStack {
-                        Image(systemName: viewModel.vibrationEnabled ? "iphone.radiowaves.left.and.right" : "iphone.slash")
+                            Image(systemName: viewModel.vibrationEnabled ? "iphone.radiowaves.left.and.right" : "iphone.slash")
                                 .font(.system(size: 30))
-                        Text(viewModel.vibrationEnabled ? "Vibration ON" : "Vibration OFF")
+                            Text(viewModel.vibrationEnabled ? "Vibration ON" : "Vibration OFF")
                                 .font(.headline)
                         }
                         .padding()
-                    .frame(width: 200, height: 100)
+                        .frame(width: 150, height: 100) // Adjusted width
                         .background(Color.white)
                         .foregroundColor(.blue)
-                    .cornerRadius(20)
+                        .cornerRadius(20)
+                    }
+                    
+                    Button(action: {
+                        viewModel.toggleSound()
+                    }) {
+                        VStack {
+                            Image(systemName: viewModel.soundEnabled ? "speaker.wave.2.fill" : "speaker.slash.fill")
+                                .font(.system(size: 30))
+                            Text(viewModel.soundEnabled ? "Sound ON" : "Sound OFF")
+                                .font(.headline)
+                        }
+                        .padding()
+                        .frame(width: 150, height: 100) // Adjusted width
+                        .background(Color.white)
+                        .foregroundColor(.blue)
+                        .cornerRadius(20)
+                    }
                 }
                 .padding(.bottom, 50)
             }
@@ -82,20 +100,35 @@ struct ARCameraView: UIViewRepresentable {
 class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
     @Published var currentDistance: Double = 0.0
     @Published var vibrationEnabled: Bool = true
-    
+    @Published var soundEnabled: Bool = true
+
     let arSession = ARSession()
     private var timer: Timer? = nil
     private let feedbackGenerator = UIImpactFeedbackGenerator(style: .medium)
-    
+
     override init() {
         super.init()
+        configureAudioSession() // Configure audio session at init
         setupARSession()
     }
-    
+
+    // Configure the shared AVAudioSession
+    private func configureAudioSession() {
+        do {
+            let audioSession = AVAudioSession.sharedInstance()
+            // Change category to .playback to ignore silent switch
+            try audioSession.setCategory(.playback, mode: .default, options: [.mixWithOthers]) // Allow mixing, ignore silent switch
+            try audioSession.setActive(true)
+            print("Audio session configured for playback (ignores silent switch).")
+        } catch {
+            print("ERROR: Failed to configure AVAudioSession: \\(error)")
+        }
+    }
+
     func setupARSession() {
         arSession.delegate = self
     }
-    
+
     func checkPermissionsAndStartSession() {
         switch AVCaptureDevice.authorizationStatus(for: .video) {
         case .authorized:
@@ -109,67 +142,67 @@ class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
                 }
             }
         default:
+            // Handle denied state if necessary
+            print("Camera access denied.")
             break
         }
     }
-    
+
     func startARSession() {
         let configuration = ARWorldTrackingConfiguration()
         if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
             configuration.frameSemantics = .sceneDepth
+        } else {
+            print("Device does not support SceneDepth.")
+            // Handle lack of depth support if necessary
         }
-        
+
         arSession.run(configuration)
-        
-        // Start vibration timer
-        startVibrationFeedback()
+
+        // Start feedback timer
+        startFeedbackTimer()
     }
-    
+
     func toggleVibration() {
         vibrationEnabled.toggle()
-        if vibrationEnabled {
-            startVibrationFeedback()
-        } else {
-            stopVibrationFeedback()
-        }
     }
-    
-    private func startVibrationFeedback() {
-        feedbackGenerator.prepare()
-        
-        // Increase the timer frequency for maximum responsiveness
-        timer = Timer.scheduledTimer(withTimeInterval: 0.02, repeats: true) { [weak self] _ in // Increased timer speed to 50Hz
-            guard let self = self, self.vibrationEnabled else { return }
-            
-            // Calculate interval based on distance
+
+    func toggleSound() {
+        soundEnabled.toggle()
+    }
+
+    // Renamed function for clarity
+    private func startFeedbackTimer() {
+        feedbackGenerator.prepare() // Prepare haptics generator
+
+        timer = Timer.scheduledTimer(withTimeInterval: 0.02, repeats: true) { [weak self] _ in // 50Hz timer
+            guard let self = self else { return }
+
             let distance = self.currentDistance
-            
-            // Only vibrate if we have a valid distance measurement
             if distance > 0 {
                 let interval = self.calculateVibrationInterval(for: distance)
-                
-                // Check if we should vibrate this cycle - avoid division by zero
-                if interval <= 0.03 {
-                    // For very close objects, vibrate every cycle or very close
-                    self.feedbackGenerator.impactOccurred()
-                    self.feedbackGenerator.prepare()
-                } else {
-                    let currentTime = Date().timeIntervalSince1970
-                    // Adjust multiplier for 50Hz timer
-                    if Int(currentTime * 50) % max(Int(interval * 50), 1) == 0 {
+                let currentTime = Date().timeIntervalSince1970
+                let shouldTrigger = Int(currentTime * 50) % max(Int(interval * 50), 1) == 0
+                let isVeryClose = interval <= 0.016 // Adjusted threshold slightly for 66Hz target
+
+                if isVeryClose || shouldTrigger {
+                    // Trigger Vibration if enabled
+                    if self.vibrationEnabled {
                         self.feedbackGenerator.impactOccurred()
-                        self.feedbackGenerator.prepare() // Prepare for next vibration
+                        self.feedbackGenerator.prepare() // Re-prepare for next haptic
+                    }
+
+                    // Trigger System Sound if enabled
+                    if self.soundEnabled {
+                        print("Playing sound... (ID: 1104)") // Add logging
+                        // Use keyboard tick sound - rapid repetition might sound like "di di di"
+                        AudioServicesPlaySystemSound(1104) // Changed back to 1104
                     }
                 }
             }
         }
     }
-    
-    private func stopVibrationFeedback() {
-        timer?.invalidate()
-        timer = nil
-    }
-    
+
     private func calculateVibrationInterval(for distance: Double) -> Double {
         // Maximize sensitivity: Reach MAX frequency at 0.8m due to LiDAR inaccuracy
         let clampedDistance = min(max(distance, 0.1), 8.0)
@@ -177,7 +210,7 @@ class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
         // Maximum vibration frequency at 0.8m and below
         if clampedDistance <= 0.8 {
             // Near-constant, maximum vibration frequency
-            // <= 0.8m -> 0.015s (66 vibrations per second)
+            // Target ~66Hz
             return 0.015
         } else if clampedDistance <= 1.5 {
             // Rapidly decrease frequency from max at 0.8m to still high at 1.5m
@@ -191,7 +224,7 @@ class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
             return 0.1 + (clampedDistance - 1.5) * (1.0 - 0.1) / (8.0 - 1.5)
         }
     }
-    
+
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
         // Check if depth data is available
         guard let depthData = frame.sceneDepth else { return }
