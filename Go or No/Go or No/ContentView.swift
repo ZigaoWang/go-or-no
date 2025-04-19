@@ -173,7 +173,7 @@ class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
 
     // Renamed function for clarity
     private func startFeedbackTimer() {
-        feedbackGenerator.prepare() // Prepare haptics generator
+        feedbackGenerator.prepare() // Prepare haptics generator ONCE before timer starts
 
         timer = Timer.scheduledTimer(withTimeInterval: 0.02, repeats: true) { [weak self] _ in // 50Hz timer
             guard let self = self else { return }
@@ -182,14 +182,14 @@ class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
             if distance > 0 {
                 let interval = self.calculateVibrationInterval(for: distance)
                 let currentTime = Date().timeIntervalSince1970
-                let shouldTrigger = Int(currentTime * 50) % max(Int(interval * 50), 1) == 0
-                let isVeryClose = interval <= 0.016 // Adjusted threshold slightly for 66Hz target
+                let isVeryClose = interval <= 0.015 // Max freq threshold
+                let shouldTriggerRegular = Int(currentTime * 50) % max(Int(interval * 50), 1) == 0
 
-                if isVeryClose || shouldTrigger {
+                if isVeryClose || shouldTriggerRegular {
                     // Trigger Vibration if enabled
                     if self.vibrationEnabled {
                         self.feedbackGenerator.impactOccurred()
-                        self.feedbackGenerator.prepare() // Re-prepare for next haptic
+                        // REMOVED prepare() call from here
                     }
 
                     // Trigger System Sound if enabled
