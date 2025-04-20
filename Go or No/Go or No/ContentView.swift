@@ -124,12 +124,11 @@ class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
     let arSession = ARSession()
     private var timer: Timer? = nil
     private let feedbackGenerator = UIImpactFeedbackGenerator(style: .medium)
-    // Speech Synthesis
+    // Speech Synthesis (Only for descriptions/errors now)
     private let synthesizer = AVSpeechSynthesizer()
-    private var lastSpokenDistance: Double = -1.0 
-    private var lastSpeechTime: Date = Date.distantPast
-    private let speechThrottleInterval: TimeInterval = 2.5 
-    private let significantDistanceChange: Double = 0.1 
+    
+    // Audio Player for Beep sound
+    private var beepPlayer: AVAudioPlayer? = nil
     
     // Store the latest frame for analysis
     private var latestFrame: ARFrame? = nil
@@ -151,6 +150,21 @@ class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
     override init() {
         super.init()
         synthesizer.delegate = self // Set delegate for speech finish detection
+        
+        // Load the beep sound
+        if let beepSoundURL = Bundle.main.url(forResource: "beep", withExtension: "wav") {
+            do {
+                beepPlayer = try AVAudioPlayer(contentsOf: beepSoundURL)
+                beepPlayer?.prepareToPlay()
+                print("Beep sound loaded successfully.")
+            } catch {
+                print("ERROR: Could not load beep sound file: \(error)")
+                beepPlayer = nil
+            }
+        } else {
+            print("ERROR: Beep sound file (beep.wav) not found in bundle.")
+        }
+        
         // Configure audio session initially for playback
         configureAudioSession(forPlayback: true) 
         setupARSession()
@@ -241,30 +255,11 @@ class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
                     // Trigger Vibration (always enabled)
                     self.feedbackGenerator.impactOccurred()
 
-                    // --- Distance Speech Logic ---
-                    // Check if the synthesizer is currently silent,
-                    // AND if we are not intentionally speaking a long description.
-                    // Sound is always enabled now.
-                    if !self.synthesizer.isSpeaking && !self.isSpeakingDescription {
-                        let now = Date()
-                        let enoughTimePassed = now.timeIntervalSince(self.lastSpeechTime) > self.speechThrottleInterval
-                        
-                        // Speak distance only if enough time has passed since the last speech
-                        if enoughTimePassed { 
-                            let currentDistanceToSpeak = self.currentDistance 
-                            if abs(currentDistanceToSpeak - self.lastSpokenDistance) > 0.05 || self.lastSpokenDistance < 0 {
-                                // Updated call to use generic speak function
-                                let distanceString = String(format: "%.1f", currentDistanceToSpeak)
-                                self.speak("\(distanceString) meters.", isDescription: false) 
-                                self.lastSpokenDistance = currentDistanceToSpeak
-                                self.lastSpeechTime = now
-                            }
-                        } 
-                    } 
-                    // --- End Distance Speech Logic ---
-                    
-                    // No need to check soundEnabled to stop synthesizer anymore,
-                    // as sound is always on unless explicitly stopped for analysis/recording.
+                    // Play beep sound synchronized with haptic feedback
+                    if let player = self.beepPlayer {
+                        player.currentTime = 0 // Rewind to start
+                        player.play()
+                    }
                 }
             }
         }
