@@ -250,7 +250,7 @@ class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
                     }
 
                     // Trigger Distance Speech if enabled AND description isn't speaking
-                    if self.soundEnabled && !self.isSpeakingDescription { // <-- Added check here
+                    if self.soundEnabled && !self.isSpeakingDescription { // Check flag BEFORE attempting to speak distance
                         // --- Simplified Speech Throttling Logic --- 
                         let now = Date()
                         let enoughTimePassed = now.timeIntervalSince(self.lastSpeechTime) > self.speechThrottleInterval
@@ -259,6 +259,7 @@ class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
                         if enoughTimePassed {
                             let currentDistanceToSpeak = self.currentDistance 
                             if abs(currentDistanceToSpeak - self.lastSpokenDistance) > 0.05 || self.lastSpokenDistance < 0 {
+                                // Pass the current isSpeakingDescription state to speakDistance, though speak() will re-check
                                 self.speakDistance(currentDistanceToSpeak)
                                 self.lastSpokenDistance = currentDistanceToSpeak
                                 self.lastSpeechTime = now
@@ -404,26 +405,32 @@ class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
     private func speak(_ text: String, isDescription: Bool = false) { // Added flag parameter
         
         // --- Interruption Logic --- 
-        // If the new text is a description, OR if nothing important is currently speaking, stop the current speech.
-        if isDescription || !isSpeakingDescription {
+        // ONLY interrupt if the NEW speech is a description.
+        // Do NOT interrupt an ongoing description for a distance update.
+        if isDescription { // Only descriptions can interrupt.
             if synthesizer.isSpeaking {
+                print("Interrupting current speech for new description.")
                 synthesizer.stopSpeaking(at: .immediate)
-                // If we interrupted something, reset the flag just in case the delegate call is delayed
-                // Only reset if we are NOT about to start a new description.
-                if !isDescription { 
-                    isSpeakingDescription = false 
-                }
+                // Explicitly reset flag here since we are interrupting
+                isSpeakingDescription = false 
             }
-        } else {
-            // If a description IS currently speaking and this new text is NOT a description,
-            // simply ignore this new text and let the description finish.
-            print("Ignoring non-description speech while description is active: \(text)")
-            return 
+            // Set flag because this new speech IS a description
+            isSpeakingDescription = true
+        } else { 
+            // If this new speech is NOT a description, check if a description is ALREADY playing.
+            if isSpeakingDescription {
+                // A description is playing, ignore this non-description speech.
+                print("Ignoring non-description speech while description is active: \(text)")
+                return 
+            } 
+            // If no description is playing, it's okay to potentially interrupt 
+            // whatever non-description might be playing (e.g. another distance).
+            // (Though this case is less likely with current throttling)
+             if synthesizer.isSpeaking {
+                 synthesizer.stopSpeaking(at: .immediate)
+             }
         }
         // --- End Interruption Logic ---
-        
-        // Set flag ONLY if it's a description we are about to start
-        isSpeakingDescription = isDescription
         
         print("Speaking: \(text)") // Log for debugging
         
@@ -577,7 +584,8 @@ class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
     private func speakDistance(_ distance: Double) {
         let distanceString = String(format: "%.1f", distance)
         let speechString = "\(distanceString) meters."
-        speak(speechString, isDescription: false) // Ensure this is flagged as NOT a description
+        // Make sure to call speak with isDescription: false
+        speak(speechString, isDescription: false) 
     }
 }
 
