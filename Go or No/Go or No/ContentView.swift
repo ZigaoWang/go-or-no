@@ -102,41 +102,6 @@ struct ContentView: View {
                     .padding(.bottom, 20)
                     .transition(.opacity.animation(.easeInOut))
                 }
-                
-                HStack(spacing: 20) { // Group toggles together
-                    Button(action: {
-                        viewModel.toggleVibration()
-                    }) {
-                        VStack {
-                            Image(systemName: viewModel.vibrationEnabled ? "iphone.radiowaves.left.and.right" : "iphone.slash")
-                                .font(.system(size: 30))
-                            Text(viewModel.vibrationEnabled ? "Vibration ON" : "Vibration OFF")
-                                .font(.headline)
-                        }
-                        .padding()
-                        .frame(width: 150, height: 100) // Adjusted width
-                        .background(Color.white)
-                        .foregroundColor(.blue)
-                        .cornerRadius(20)
-                    }
-                    
-                    Button(action: {
-                        viewModel.toggleSound()
-                    }) {
-                        VStack {
-                            Image(systemName: viewModel.soundEnabled ? "speaker.wave.2.fill" : "speaker.slash.fill")
-                                .font(.system(size: 30))
-                            Text(viewModel.soundEnabled ? "Sound ON" : "Sound OFF")
-                                .font(.headline)
-                        }
-                        .padding()
-                        .frame(width: 150, height: 100) // Adjusted width
-                        .background(Color.white)
-                        .foregroundColor(.blue)
-                        .cornerRadius(20)
-                    }
-                }
-                .padding(.bottom, 50)
             }
         }
         .onAppear {
@@ -160,8 +125,8 @@ struct ARCameraView: UIViewRepresentable {
 
 class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
     @Published var currentDistance: Double = 0.0
-    @Published var vibrationEnabled: Bool = true
-    @Published var soundEnabled: Bool = true // Controls distance speech
+    private var vibrationEnabled: Bool = true
+    private var soundEnabled: Bool = true // Controls distance speech
     @Published var focusAreaSize: CGFloat = 0.50
     @Published var isAnalyzing: Bool = false // State for analysis button
     @Published var analysisResultText: String = "" // State for description display
@@ -270,18 +235,6 @@ class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
         startFeedbackTimer()
     }
 
-    func toggleVibration() {
-        vibrationEnabled.toggle()
-    }
-
-    func toggleSound() {
-        soundEnabled.toggle()
-        if !soundEnabled && synthesizer.isSpeaking {
-            synthesizer.stopSpeaking(at: .immediate)
-            isSpeakingDescription = false
-        }
-    }
-
     // Renamed function for clarity
     private func startFeedbackTimer() {
         feedbackGenerator.prepare() // Prepare haptics generator ONCE before timer starts
@@ -297,15 +250,14 @@ class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
                 let shouldTriggerRegular = Int(currentTime * 50) % max(Int(interval * 50), 1) == 0
 
                 if isVeryClose || shouldTriggerRegular {
-                    // Trigger Vibration if enabled
-                    if self.vibrationEnabled {
-                        self.feedbackGenerator.impactOccurred()
-                    }
+                    // Trigger Vibration (always enabled)
+                    self.feedbackGenerator.impactOccurred()
 
-                    // --- Distance Speech Logic --- 
-                    // Check if sound is enabled for distance, AND if the synthesizer is currently silent,
+                    // --- Distance Speech Logic ---
+                    // Check if the synthesizer is currently silent,
                     // AND if we are not intentionally speaking a long description.
-                    if self.soundEnabled && !self.synthesizer.isSpeaking && !self.isSpeakingDescription { 
+                    // Sound is always enabled now.
+                    if !self.synthesizer.isSpeaking && !self.isSpeakingDescription {
                         let now = Date()
                         let enoughTimePassed = now.timeIntervalSince(self.lastSpeechTime) > self.speechThrottleInterval
                         
@@ -321,12 +273,8 @@ class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
                     } 
                     // --- End Distance Speech Logic ---
                     
-                    // Logic to stop synthesizer if sound toggle is disabled (moved outside the distance speech block)
-                    else if !self.soundEnabled && self.synthesizer.isSpeaking {
-                         self.synthesizer.stopSpeaking(at: .immediate)
-                         // Ensure flag is reset if speech is cut off by disabling sound
-                         self.isSpeakingDescription = false 
-                    }
+                    // No need to check soundEnabled to stop synthesizer anymore,
+                    // as sound is always on unless explicitly stopped for analysis/recording.
                 }
             }
         }
