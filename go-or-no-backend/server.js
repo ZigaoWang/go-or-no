@@ -71,10 +71,11 @@ app.post('/describe-image', async (req, res) => {
 
 // --- NEW Endpoint for Follow-up Questions ---
 app.post('/follow-up-analysis', async (req, res) => {
-    const { imageData, audioData } = req.body;
+    // Now expects previousDescription as well
+    const { imageData, audioData, previousDescription } = req.body; 
 
-    if (!imageData || !audioData) {
-        return res.status(400).json({ error: 'Missing imageData or audioData in request body' });
+    if (!imageData || !audioData || previousDescription === undefined) { // Check for all three
+        return res.status(400).json({ error: 'Missing imageData, audioData, or previousDescription in request body' });
     }
 
     console.log('Received follow-up analysis request...');
@@ -98,19 +99,16 @@ app.post('/follow-up-analysis', async (req, res) => {
         const userQuestion = transcription.text;
         console.log(`Transcription successful: "${userQuestion}"`);
 
-        // 3. Call GPT-4o with image context and transcribed question
-        console.log('Asking follow-up question to GPT-4o...');
+        // 3. Call GPT-4o with image, PREVIOUS DESCRIPTION, and transcribed question
+        console.log('Asking follow-up question to GPT-4o with context...');
         const followUpResponse = await openai.chat.completions.create({
             model: "gpt-4o",
+            // Provide conversation history including the previous description
             messages: [
                 {
-                    role: "user",
+                    role: "user", // Initial image prompt context
                     content: [
-                        {
-                            type: "text",
-                            // Prompt includes transcribed question
-                            text: `Based on the image, answer the following question concisely: "${userQuestion}"`
-                        },
+                        { type: "text", text: "Describe this image for a visually impaired user, focusing on identification, function, and navigation. Omit non-essential details." }, // You might adjust this initial context prompt
                         {
                             type: "image_url",
                             image_url: {
@@ -119,8 +117,16 @@ app.post('/follow-up-analysis', async (req, res) => {
                         },
                     ],
                 },
+                {
+                    role: "assistant", // The AI's previous response
+                    content: previousDescription
+                },
+                {
+                    role: "user", // The user's follow-up question
+                    content: userQuestion
+                }
             ],
-            max_tokens: 100, // Limit follow-up answer length
+            max_tokens: 100, 
         });
 
         console.log('GPT-4o follow-up response received.');

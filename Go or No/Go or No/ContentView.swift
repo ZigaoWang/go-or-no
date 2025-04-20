@@ -184,6 +184,8 @@ class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
     private var isSpeakingDescription: Bool = false 
     // Store last analyzed image data for follow-up
     private var lastAnalyzedImageData: Data? = nil 
+    // Store last successful analysis text for follow-up context
+    private var lastAnalysisDescription: String? = nil
     
     // Audio Recording Components
     private let audioEngineForRecord = AVAudioEngine()
@@ -503,12 +505,12 @@ class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
             return
         }
         
-        // Stop any current speech/recording before starting
+        // Stop audio, reset state
         stopAudioActivities()
-        
         isAnalyzing = true
-        canAskFollowUp = false // Disable follow-up during analysis
+        canAskFollowUp = false 
         analysisResultText = "Analyzing..." 
+        lastAnalysisDescription = nil // Clear previous context before new analysis
         speak("Analyzing scene...") 
         
         // Get image from frame
@@ -532,12 +534,12 @@ class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
             isAnalyzing = false
             return
         }
-        self.lastAnalyzedImageData = imageData // Store image data for follow-up
+        self.lastAnalyzedImageData = imageData // Store image data
         
         // Convert to base64
         let base64Image = imageData.base64EncodedString()
         
-        // --- Network Request --- 
+        // --- Network Request (Original Analysis) --- 
         guard let url = URL(string: "\(backendBaseURL)/describe-image") else {
             speak("Invalid backend URL.")
             analysisResultText = "Configuration error."
@@ -563,7 +565,7 @@ class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
         
         let task = URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
             DispatchQueue.main.async {
-                self?.isAnalyzing = false // Analysis finished (success or fail)
+                self?.isAnalyzing = false
                 
                 if let error = error {
                     // Handle specific timeout error
@@ -576,6 +578,7 @@ class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
                         self?.speak("Error analyzing scene. Check network connection.") // More specific error
                         self?.analysisResultText = "Network error."
                     }
+                    self?.canAskFollowUp = false
                     return
                 }
                 
@@ -583,31 +586,30 @@ class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
                     print("Server Error: \(response.debugDescription)")
                     self?.speak("Error analyzing scene: Server issue.")
                     self?.analysisResultText = "Server error."
+                    self?.canAskFollowUp = false
                     return
                 }
                 
                 guard let data = data else {
                     self?.speak("No description received.")
                     self?.analysisResultText = "No description received."
+                    self?.canAskFollowUp = false
                     return
                 }
                 
-                // Decode JSON response (assuming { "description": "..." })
-                struct DescriptionResponse: Decodable {
-                    let description: String
-                }
-                
+                // Decode JSON response
+                struct DescriptionResponse: Decodable { let description: String }
                 do {
                     let decodedResponse = try JSONDecoder().decode(DescriptionResponse.self, from: data)
                     self?.analysisResultText = decodedResponse.description 
-                    // Set canAskFollowUp only on successful description
-                    self?.canAskFollowUp = true 
+                    self?.lastAnalysisDescription = decodedResponse.description // <-- STORE description text
+                    self?.canAskFollowUp = true // <-- ENABLE follow-up
                     self?.speak(decodedResponse.description, isDescription: true) 
                 } catch {
                     print("JSON Decoding Error: \(error)")
                     self?.speak("Could not understand analysis response.")
                     self?.analysisResultText = "Error decoding response."
-                    self?.canAskFollowUp = false // Can't follow up on error
+                    self?.canAskFollowUp = false // Ensure follow-up is disabled on decode error
                 }
             }
         }
@@ -830,7 +832,17 @@ class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
 
     private func sendFollowUpRequest(imageData: String, audioData: String) {
         isAnalyzing = true // Use the same flag to disable buttons
+        canAskFollowUp = false // Disable follow-up during analysis
         analysisResultText = "Analyzing follow-up..."
+        
+        // Retrieve the last successful description for context
+        guard let previousDescription = lastAnalysisDescription else {
+            speak("Missing context from previous analysis.")
+            analysisResultText = "Error: Missing context."
+            isAnalyzing = false
+            canAskFollowUp = true // Re-enable follow-up
+            return
+        }
         
         guard let url = URL(string: "\(backendBaseURL)/follow-up-analysis") else {
             speak("Invalid follow-up URL.")
@@ -845,7 +857,11 @@ class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = networkTimeout * 2 // Allow longer for transcription+analysis
         
-        let jsonBody: [String: String] = ["imageData": imageData, "audioData": audioData]
+        let jsonBody: [String: String] = [
+            "imageData": imageData, 
+            "audioData": audioData,
+            "previousDescription": previousDescription 
+        ]
         
         do {
             request.httpBody = try JSONEncoder().encode(jsonBody)
@@ -895,10 +911,12 @@ class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
                      // Prepend question context? Maybe not needed if answer is direct.
                      let resultText = "Follow-up: \n" + decodedResponse.answer
                      self?.analysisResultText = resultText
+                     self?.lastAnalysisDescription = decodedResponse.answer // Store the new answer as the latest description for potential further follow-ups?
                      self?.speak(decodedResponse.answer, isDescription: true) // Speak the follow-up answer
                  } catch {
                      self?.speak("Could not understand follow-up answer.")
                      self?.analysisResultText = "Error decoding answer."
+                     self?.lastAnalysisDescription = nil // Clear context on error?
                  }
             }
         }
