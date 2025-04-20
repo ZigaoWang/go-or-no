@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Go or No Privacy Policy</title>
+    <style>
+        body {
+            /* Use system fonts for a native look */
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+            line-height: 1.6;
+            margin: 20px;
+            padding: 15px;
+            background-color: #f8f9fa;
+            color: #333;
+        }
+        h1, h2 {
+            color: #0056b3; /* A blue color */
+            border-bottom: 1px solid #ddd;
+            padding-bottom: 5px;
+        }
+        h1 {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        h2 {
+            margin-top: 25px;
+        }
+        p, li {
+            margin-bottom: 10px;
+        }
+        ul {
+            margin-left: 20px;
+            list-style-type: disc;
+        }
+        strong {
+            font-weight: bold;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background-color: #ffffff;
+            padding: 20px 30px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            border-radius: 8px;
+        }
+        .date {
+            text-align: right;
+            font-style: italic;
+            color: #666;
+            margin-top: 30px;
+        }
+         .attribution {
+            text-align: right;
+            font-style: italic;
+            color: #666;
+            font-size: 0.9em;
+            margin-top: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Privacy Policy for Go or No</h1>
+
+        <h2>Introduction</h2>
+        <p>Welcome to Go or No ("the App"). This Privacy Policy explains the information processed by the application designed to assist visually impaired users with navigation and environment awareness through haptic feedback and audible question answering.</p>
+        <p>We are committed to user privacy and minimizing data collection.</p>
+
+        <h2>Information Processed</h2>
+        <p>To provide its core functionality, Go or No requires access to and processes the following types of information:</p>
+        <ul>
+            <li><strong>Camera & Depth Data:</strong> The App accesses your device's camera and depth sensor data (if available) solely for real-time, on-device processing to calculate distances for haptic feedback. This sensor data is not stored or transmitted off the device for this purpose.</li>
+            <li><strong>Microphone Data (Audio Recordings):</strong> When you use the "Ask Question" feature, the App records your voice query.</li>
+            <li><strong>Scene Context (Image and Text):</strong> To answer your audible questions, the App captures an image of the current scene and may use the text from the previous answer (if any) as context.</li>
+        </ul>
+        <p>We do <strong>not</strong> collect or store personally identifiable information like your name, email address, location, or user identifiers.</p>
+
+        <h2>How Information is Used</h2>
+        <p>The information processed is used strictly for the following purposes:</p>
+        <ul>
+            <li><strong>Haptic Feedback:</strong> Camera and depth data are used locally on your device for distance calculation.</li>
+            <li><strong>Answering Questions:</strong> Captured image data, recorded audio questions, and previous answer text (context) are sent to our backend service (hosted at api.go-or-no.zigao.wang) solely for immediate processing. This processing generates a relevant audible answer based on the scene and your question.</li>
+        </ul>
+        <p><strong>Important:</strong> The data sent to the backend (image, audio, context text) is processed only to generate the answer for your current question. We do not store this information on our servers after the response is generated. No user data is logged or retained by us from these requests.</p>
+
+
+        <h2>Data Sharing</h2>
+        <p>We do not sell, rent, or share your data with third parties, except in the following limited circumstance:</p>
+        <ul>
+            <li><strong>Backend Processing:</strong> As described above, data is sent to our backend service (api.go-or-no.zigao.wang) strictly for the purpose of generating an answer to your question. This data is not stored by us.</li>
+            <li><strong>Legal Requirements:</strong> We may disclose information if required by law or if we believe in good faith that disclosure is necessary to protect our rights, your safety, or the safety of others, or to respond to a legal request.</li>
+        </ul>
+
+        <h2>Data Security</h2>
+        <p>We implement reasonable measures to protect data during transmission to our backend service (e.g., using HTTPS). As data is processed ephemerally for question answering and not stored by us, the primary security relates to the secure operation of the app on your device and the temporary transmission.</p>
+
+        <h2>Permissions Required</h2>
+        <p>Go or No requires the following permissions:</p>
+        <ul>
+            <li><strong>Camera Access:</strong> Needed for real-time scene analysis and distance calculation.</li>
+            <li><strong>Microphone Access:</strong> Needed to record your audible questions.</li>
+        </ul>
+        <p>These permissions can be managed in your device's settings.</p>
+
+        <h2>Children's Privacy</h2>
+        <p>Go or No is not directed at children under 13. We do not knowingly process any information from children.</p>
+
+        <h2>Changes to This Privacy Policy</h2>
+        <p>We may update this Privacy Policy occasionally. Significant changes will be communicated by posting the updated policy here. Please review it periodically.</p>
+
+        <h2>Contact Us</h2>
+        <p>If you have questions about this Privacy Policy, please contact us at: a@zigao.wang.</p>
+
+        <p class="date"><strong>Effective Date:</strong> April 20, 2025</p>
+        <p class="attribution">by Zigao Wang</p>
+    </div>
+</body>
+</html>
