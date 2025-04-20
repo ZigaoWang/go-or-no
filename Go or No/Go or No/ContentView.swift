@@ -39,6 +39,13 @@ struct ContentView: View {
                 Image(systemName: "target")
                     .font(.system(size: 50))
                     .foregroundColor(.red.opacity(0.7))
+                    // Dynamic target size based on slider
+                    .overlay(
+                        Rectangle()
+                            .stroke(Color.yellow.opacity(0.5), lineWidth: 2)
+                            .frame(width: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * viewModel.focusAreaSize,
+                                   height: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * viewModel.focusAreaSize)
+                    )
                 
                 Spacer()
 
@@ -101,11 +108,12 @@ class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
     @Published var currentDistance: Double = 0.0
     @Published var vibrationEnabled: Bool = true
     @Published var soundEnabled: Bool = true
+    @Published var focusAreaSize: CGFloat = 0.50
 
     let arSession = ARSession()
     private var timer: Timer? = nil
     private let feedbackGenerator = UIImpactFeedbackGenerator(style: .medium)
-
+    
     override init() {
         super.init()
         configureAudioSession() // Configure audio session at init
@@ -128,7 +136,7 @@ class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
     func setupARSession() {
         arSession.delegate = self
     }
-
+    
     func checkPermissionsAndStartSession() {
         switch AVCaptureDevice.authorizationStatus(for: .video) {
         case .authorized:
@@ -147,7 +155,7 @@ class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
             break
         }
     }
-
+    
     func startARSession() {
         let configuration = ARWorldTrackingConfiguration()
         if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
@@ -228,47 +236,99 @@ class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
         // Check if depth data is available
         guard let depthData = frame.sceneDepth else { return }
+        let depthMap = depthData.depthMap // Get the pixel buffer
         
-        // Get the depth at the center of the frame
-        let width = CVPixelBufferGetWidth(depthData.depthMap)
-        let height = CVPixelBufferGetHeight(depthData.depthMap)
-        let centerX = width / 2
-        let centerY = height / 2
-        
-        if let depth = getDepthFromBuffer(depthData.depthMap, atPoint: (centerX, centerY)) {
-            DispatchQueue.main.async {
-                self.currentDistance = depth
-            }
-        }
-    }
-    
-    private func getDepthFromBuffer(_ depthMap: CVPixelBuffer, atPoint point: (Int, Int)) -> Double? {
-        CVPixelBufferLockBaseAddress(depthMap, .readOnly)
-        defer { CVPixelBufferUnlockBaseAddress(depthMap, .readOnly) }
-        
-        // Get buffer dimensions
+        // Get depth map dimensions
         let width = CVPixelBufferGetWidth(depthMap)
         let height = CVPixelBufferGetHeight(depthMap)
+        guard width > 0, height > 0 else { return }
         
-        // Ensure point is within bounds
-        guard point.0 >= 0, point.0 < width, point.1 >= 0, point.1 < height else {
+        // Calculate focus rectangle in pixel coordinates
+        let focusRect = calculateFocusRect(depthMapWidth: width, depthMapHeight: height)
+        
+        // Get minimum depth within the focus rectangle
+        if let depth = getMinDepth(in: focusRect, from: depthMap) {
+            DispatchQueue.main.async {
+                // Slightly faster smoothing
+                self.currentDistance = self.currentDistance * 0.6 + depth * 0.4
+            }
+        } // If depth is nil (no valid point found), distance is not updated
+    }
+    
+    // Helper to calculate the focus rectangle based on focusAreaSize
+    private func calculateFocusRect(depthMapWidth: Int, depthMapHeight: Int) -> CGRect {
+        let rectWidth = CGFloat(depthMapWidth) * focusAreaSize
+        let rectHeight = CGFloat(depthMapHeight) * focusAreaSize
+        let rectX = (CGFloat(depthMapWidth) - rectWidth) / 2.0
+        let rectY = (CGFloat(depthMapHeight) - rectHeight) / 2.0
+        
+        return CGRect(x: rectX, y: rectY, width: rectWidth, height: rectHeight)
+    }
+    
+    // Updated function to get minimum depth in a CGRect
+    private func getMinDepth(in rect: CGRect, from depthMap: CVPixelBuffer) -> Double? {
+        CVPixelBufferLockBaseAddress(depthMap, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(depthMap, .readOnly) }
+
+        guard let baseAddress = CVPixelBufferGetBaseAddress(depthMap) else {
             return nil
         }
-        
-        // Get a pointer to the depth data
-        let baseAddress = CVPixelBufferGetBaseAddress(depthMap)
         let bytesPerRow = CVPixelBufferGetBytesPerRow(depthMap)
-        let depthPointer = baseAddress!.advanced(by: point.1 * bytesPerRow + point.0 * MemoryLayout<Float32>.size).assumingMemoryBound(to: Float32.self)
-        
-        // Get the depth value (in meters)
-        let depth = Double(depthPointer.pointee)
-        
-        // Return nil if depth is invalid (0 or infinity)
-        guard depth > 0, depth.isFinite else {
+        let width = CVPixelBufferGetWidth(depthMap)
+        let height = CVPixelBufferGetHeight(depthMap)
+
+        var minDepth: Double = Double.greatestFiniteMagnitude
+        var validDepthFound = false
+
+        // Define loop bounds, ensuring they are within the buffer dimensions
+        let startX = max(0, Int(rect.minX))
+        let endX = min(width, Int(rect.maxX))
+        let startY = max(0, Int(rect.minY))
+        let endY = min(height, Int(rect.maxY))
+
+        // Ensure start is not greater than end
+        guard startX < endX, startY < endY else {
+             // If rect is outside bounds or invalid, return nil
+             print("Warning: Focus rectangle outside bounds or invalid.")
+             return nil // Don't fallback to center, just report no valid depth
+         }
+
+        // Iterate through the pixels in the rectangle (with a step to reduce computation)
+        // Sample roughly 15x15 points within the rect for performance
+        let step = max(1, Int(min(rect.width, rect.height) / 15.0))
+        for y in stride(from: startY, to: endY, by: step) {
+            for x in stride(from: startX, to: endX, by: step) {
+                 if let depth = getDepthAtSinglePoint(x: x, y: y, depthMap: depthMap) {
+                    minDepth = min(minDepth, depth)
+                    validDepthFound = true
+                }
+            }
+        }
+
+        return validDepthFound ? minDepth : nil // Return nil if no valid depth found
+    }
+
+    // Helper function to get depth at a single point (remains the same)
+    private func getDepthAtSinglePoint(x: Int, y: Int, depthMap: CVPixelBuffer) -> Double? {
+        // Assumes base address is already locked and valid
+        guard let baseAddress = CVPixelBufferGetBaseAddress(depthMap) else { return nil }
+        let bytesPerRow = CVPixelBufferGetBytesPerRow(depthMap)
+        let width = CVPixelBufferGetWidth(depthMap)
+        let height = CVPixelBufferGetHeight(depthMap)
+
+        // Bounds check
+        guard x >= 0, x < width, y >= 0, y < height else {
             return nil
         }
-        
-        return depth
+
+        let depthPointer = baseAddress.advanced(by: y * bytesPerRow + x * MemoryLayout<Float32>.size).assumingMemoryBound(to: Float32.self)
+        let depthValue = Double(depthPointer.pointee)
+
+        // Return nil if depth is invalid (0, negative, or infinity/NaN)
+        guard depthValue > 0, depthValue.isFinite else {
+            return nil
+        }
+        return depthValue
     }
 }
 
