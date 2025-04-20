@@ -33,7 +33,21 @@ struct ContentView: View {
                         .background(Color.black.opacity(0.6))
                         .cornerRadius(12)
                 }
-                .padding(.bottom, 50)
+                .padding(.bottom, 10)
+                
+                // Analysis Result Display
+                if !viewModel.analysisResultText.isEmpty {
+                    Text(viewModel.analysisResultText)
+                        .font(.body)
+                        .foregroundColor(.white)
+                        .padding()
+                        .frame(maxWidth: .infinity)
+                        .background(Color.black.opacity(0.6))
+                        .cornerRadius(12)
+                        .padding(.horizontal)
+                        .padding(.bottom, 30) // Spacing below description
+                        .transition(.opacity.animation(.easeInOut))
+                }
                 
                 // Target indicator in center
                 Image(systemName: "target")
@@ -48,6 +62,25 @@ struct ContentView: View {
                     )
                 
                 Spacer()
+
+                // Analyze Button
+                Button(action: { 
+                    viewModel.analyzeCurrentImage()
+                }) {
+                    HStack {
+                        Image(systemName: "eye.fill")
+                        Text("Analyze Scene")
+                    }
+                    .font(.headline)
+                    .padding()
+                    .frame(maxWidth: .infinity)
+                    .background(viewModel.isAnalyzing ? Color.gray : Color.purple)
+                    .foregroundColor(.white)
+                    .cornerRadius(15)
+                }
+                .disabled(viewModel.isAnalyzing)
+                .padding(.horizontal)
+                .padding(.bottom, 20)
 
                 HStack(spacing: 20) { // Group toggles together
                     Button(action: {
@@ -107,23 +140,33 @@ struct ARCameraView: UIViewRepresentable {
 class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
     @Published var currentDistance: Double = 0.0
     @Published var vibrationEnabled: Bool = true
-    @Published var soundEnabled: Bool = true
+    @Published var soundEnabled: Bool = true // Controls distance speech
     @Published var focusAreaSize: CGFloat = 0.50
+    @Published var isAnalyzing: Bool = false // State for analysis button
+    @Published var analysisResultText: String = "" // State for description display
 
     let arSession = ARSession()
     private var timer: Timer? = nil
     private let feedbackGenerator = UIImpactFeedbackGenerator(style: .medium)
     // Speech Synthesis
     private let synthesizer = AVSpeechSynthesizer()
-    private var lastSpokenDistance: Double = -1.0 // Track last spoken distance
-    private var lastSpeechTime: Date = Date.distantPast // Track time of last speech
-    // Increase throttle interval for slower refresh
+    private var lastSpokenDistance: Double = -1.0 
+    private var lastSpeechTime: Date = Date.distantPast
     private let speechThrottleInterval: TimeInterval = 2.5 
-    private let significantDistanceChange: Double = 0.1 // Meters (Keep for potential future refinement if needed)
+    private let significantDistanceChange: Double = 0.1 
+    
+    // Store the latest frame for analysis
+    private var latestFrame: ARFrame? = nil
+    // Flag to prevent distance speech from interrupting analysis speech
+    private var isSpeakingDescription: Bool = false 
+    
+    private let backendBaseURL = "https://api.go-or-no.zigao.wang"
+    private let networkTimeout: TimeInterval = 15.0 // Timeout in seconds
     
     override init() {
         super.init()
-        configureAudioSession() // Configure audio session at init
+        synthesizer.delegate = self // Set delegate for speech finish detection
+        configureAudioSession()
         setupARSession()
     }
 
@@ -204,20 +247,17 @@ class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
                     // Trigger Vibration if enabled
                     if self.vibrationEnabled {
                         self.feedbackGenerator.impactOccurred()
-                        // REMOVED prepare() call from here
                     }
 
-                    // Trigger System Sound if enabled
-                    if self.soundEnabled {
+                    // Trigger Distance Speech if enabled AND description isn't speaking
+                    if self.soundEnabled && !self.isSpeakingDescription { // <-- Added check here
                         // --- Simplified Speech Throttling Logic --- 
                         let now = Date()
                         let enoughTimePassed = now.timeIntervalSince(self.lastSpeechTime) > self.speechThrottleInterval
                         
                         // Speak only if enough time has passed since the last announcement
                         if enoughTimePassed {
-                            // Get the *current* distance for the announcement
                             let currentDistanceToSpeak = self.currentDistance 
-                            // Avoid speaking if distance is effectively unchanged since last speech
                             if abs(currentDistanceToSpeak - self.lastSpokenDistance) > 0.05 || self.lastSpokenDistance < 0 {
                                 self.speakDistance(currentDistanceToSpeak)
                                 self.lastSpokenDistance = currentDistanceToSpeak
@@ -225,10 +265,11 @@ class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
                             }
                         } 
                         // --- End Speech Throttling --- 
-                    } else {
+                    } else if !self.soundEnabled {
                         // Optional: Stop speaking immediately if sound is disabled
                         if synthesizer.isSpeaking {
                              synthesizer.stopSpeaking(at: .immediate)
+                             self.isSpeakingDescription = false // Ensure flag is reset if speech is cut off
                         }
                     }
                 }
@@ -259,6 +300,8 @@ class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
     }
 
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
+        self.latestFrame = frame // Keep track of the latest frame
+        
         // Check if depth data is available
         guard let depthData = frame.sceneDepth else { return }
         let depthMap = depthData.depthMap // Get the pixel buffer
@@ -357,29 +400,203 @@ class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
     }
 
     // --- Speech Function --- 
-    private func speakDistance(_ distance: Double) {
-        // Stop current speech immediately to prevent overlap
-        if synthesizer.isSpeaking {
-            synthesizer.stopSpeaking(at: .immediate)
+    // Modified to potentially speak descriptions too
+    private func speak(_ text: String, isDescription: Bool = false) { // Added flag parameter
+        
+        // --- Interruption Logic --- 
+        // If the new text is a description, OR if nothing important is currently speaking, stop the current speech.
+        if isDescription || !isSpeakingDescription {
+            if synthesizer.isSpeaking {
+                synthesizer.stopSpeaking(at: .immediate)
+                // If we interrupted something, reset the flag just in case the delegate call is delayed
+                // Only reset if we are NOT about to start a new description.
+                if !isDescription { 
+                    isSpeakingDescription = false 
+                }
+            }
+        } else {
+            // If a description IS currently speaking and this new text is NOT a description,
+            // simply ignore this new text and let the description finish.
+            print("Ignoring non-description speech while description is active: \(text)")
+            return 
         }
+        // --- End Interruption Logic ---
         
-        // Format distance string with one decimal place
-        let distanceString = String(format: "%.1f", distance)
+        // Set flag ONLY if it's a description we are about to start
+        isSpeakingDescription = isDescription
         
-        // Create the simple announcement string
-        let speechString = "\(distanceString) meters."
-        
-        print("Speaking: \(speechString)") // Log for debugging
+        print("Speaking: \(text)") // Log for debugging
         
         // Create and configure utterance
-        let utterance = AVSpeechUtterance(string: speechString)
-        // Adjust rate to be slightly slower than default for clarity
-        utterance.rate = AVSpeechUtteranceDefaultSpeechRate * 0.95 
+        let utterance = AVSpeechUtterance(string: text)
+        utterance.rate = AVSpeechUtteranceDefaultSpeechRate * 0.95 // Keep slightly slower rate
         utterance.volume = 1.0 // Max volume
-        // utterance.voice = AVSpeechSynthesisVoice(language: "en-US") // Optional: Specify voice
         
         // Speak the utterance
         synthesizer.speak(utterance)
+    }
+    
+    // --- Image Analysis Function --- 
+    func analyzeCurrentImage() {
+        guard !isAnalyzing else { return } // Prevent multiple requests
+        guard let frame = latestFrame else {
+            speak("Could not get camera view.")
+            return
+        }
+        
+        isAnalyzing = true
+        analysisResultText = "Analyzing..." // Update display text
+        speak("Analyzing scene...") // Provide initial feedback (not flagged as description)
+        
+        // Get image from frame
+        let pixelBuffer = frame.capturedImage
+        let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+        let context = CIContext(options: nil)
+        guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else {
+            speak("Could not process image.")
+            analysisResultText = "Error processing image." // Update display text
+            isAnalyzing = false
+            return
+        }
+        let image = UIImage(cgImage: cgImage)
+        
+        // Resize image for faster upload (Reduced size further)
+        let targetSize = CGSize(width: 512, height: 384) 
+        guard let resizedImage = resizeImage(image: image, targetSize: targetSize), 
+              let imageData = resizedImage.jpegData(compressionQuality: 0.7) else { // Use JPEG
+            speak("Could not prepare image for analysis.")
+            analysisResultText = "Error preparing image." // Update display text
+            isAnalyzing = false
+            return
+        }
+        
+        // Convert to base64
+        let base64Image = imageData.base64EncodedString()
+        
+        // --- Network Request --- 
+        guard let url = URL(string: "\(backendBaseURL)/describe-image") else {
+            speak("Invalid backend URL.")
+            analysisResultText = "Configuration error."
+            isAnalyzing = false
+            return
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = networkTimeout // Set request timeout
+        
+        let jsonBody: [String: String] = ["imageData": base64Image]
+        
+        do {
+            request.httpBody = try JSONEncoder().encode(jsonBody)
+        } catch {
+            speak("Failed to encode request.")
+            analysisResultText = "Error encoding request."
+            isAnalyzing = false
+            return
+        }
+        
+        let task = URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+            DispatchQueue.main.async {
+                self?.isAnalyzing = false // Analysis finished (success or fail)
+                
+                if let error = error {
+                    // Handle specific timeout error
+                    if (error as NSError).code == NSURLErrorTimedOut {
+                        print("Network Error: Request timed out.")
+                        self?.speak("Analysis timed out. Please try again.")
+                        self?.analysisResultText = "Analysis timed out."
+                    } else {
+                        print("Network Error: \(error.localizedDescription)")
+                        self?.speak("Error analyzing scene. Check network connection.") // More specific error
+                        self?.analysisResultText = "Network error."
+                    }
+                    return
+                }
+                
+                guard let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) else {
+                    print("Server Error: \(response.debugDescription)")
+                    self?.speak("Error analyzing scene: Server issue.")
+                    self?.analysisResultText = "Server error."
+                    return
+                }
+                
+                guard let data = data else {
+                    self?.speak("No description received.")
+                    self?.analysisResultText = "No description received."
+                    return
+                }
+                
+                // Decode JSON response (assuming { "description": "..." })
+                struct DescriptionResponse: Decodable {
+                    let description: String
+                }
+                
+                do {
+                    let decodedResponse = try JSONDecoder().decode(DescriptionResponse.self, from: data)
+                    self?.analysisResultText = decodedResponse.description // Update display text
+                    self?.speak(decodedResponse.description, isDescription: true) // Speak the AI description, flagged as description
+                } catch {
+                    print("JSON Decoding Error: \(error)")
+                    self?.speak("Could not understand analysis response.")
+                    self?.analysisResultText = "Error decoding response."
+                }
+            }
+        }
+        task.resume()
+    }
+    
+    // --- Helper Functions --- 
+    
+    // Simple image resizing helper
+    private func resizeImage(image: UIImage, targetSize: CGSize) -> UIImage? {
+        let size = image.size
+        
+        let widthRatio  = targetSize.width  / size.width
+        let heightRatio = targetSize.height / size.height
+        
+        var newSize: CGSize
+        if(widthRatio > heightRatio) {
+            newSize = CGSize(width: size.width * heightRatio, height: size.height * heightRatio)
+        } else {
+            newSize = CGSize(width: size.width * widthRatio, height: size.height * widthRatio)
+        }
+        
+        let rect = CGRect(x: 0, y: 0, width: newSize.width, height: newSize.height)
+        
+        UIGraphicsBeginImageContextWithOptions(newSize, false, 1.0)
+        image.draw(in: rect)
+        let newImage = UIGraphicsGetImageFromCurrentImageContext()
+        UIGraphicsEndImageContext()
+        
+        return newImage
+    }
+    
+    // Renamed speakDistance to use generic speak function
+    private func speakDistance(_ distance: Double) {
+        let distanceString = String(format: "%.1f", distance)
+        let speechString = "\(distanceString) meters."
+        speak(speechString, isDescription: false) // Ensure this is flagged as NOT a description
+    }
+}
+
+// Add Speech Synthesizer Delegate extension
+extension CameraViewModel: AVSpeechSynthesizerDelegate {
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
+        // Reset the flag when speech finishes
+        DispatchQueue.main.async {
+             print("Speech finished, resetting flag.")
+            self.isSpeakingDescription = false
+        }
+    }
+    
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
+        // Also reset the flag if speech is cancelled
+         DispatchQueue.main.async {
+             print("Speech cancelled, resetting flag.")
+             self.isSpeakingDescription = false
+         }
     }
 }
 
