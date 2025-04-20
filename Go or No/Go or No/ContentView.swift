@@ -113,6 +113,13 @@ class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
     let arSession = ARSession()
     private var timer: Timer? = nil
     private let feedbackGenerator = UIImpactFeedbackGenerator(style: .medium)
+    // Speech Synthesis
+    private let synthesizer = AVSpeechSynthesizer()
+    private var lastSpokenDistance: Double = -1.0 // Track last spoken distance
+    private var lastSpeechTime: Date = Date.distantPast // Track time of last speech
+    // Increase throttle interval for slower refresh
+    private let speechThrottleInterval: TimeInterval = 2.5 
+    private let significantDistanceChange: Double = 0.1 // Meters (Keep for potential future refinement if needed)
     
     override init() {
         super.init()
@@ -202,9 +209,27 @@ class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
 
                     // Trigger System Sound if enabled
                     if self.soundEnabled {
-                        print("Playing sound... (ID: 1104)") // Add logging
-                        // Use keyboard tick sound - rapid repetition might sound like "di di di"
-                        AudioServicesPlaySystemSound(1104) // Changed back to 1104
+                        // --- Simplified Speech Throttling Logic --- 
+                        let now = Date()
+                        let enoughTimePassed = now.timeIntervalSince(self.lastSpeechTime) > self.speechThrottleInterval
+                        
+                        // Speak only if enough time has passed since the last announcement
+                        if enoughTimePassed {
+                            // Get the *current* distance for the announcement
+                            let currentDistanceToSpeak = self.currentDistance 
+                            // Avoid speaking if distance is effectively unchanged since last speech
+                            if abs(currentDistanceToSpeak - self.lastSpokenDistance) > 0.05 || self.lastSpokenDistance < 0 {
+                                self.speakDistance(currentDistanceToSpeak)
+                                self.lastSpokenDistance = currentDistanceToSpeak
+                                self.lastSpeechTime = now
+                            }
+                        } 
+                        // --- End Speech Throttling --- 
+                    } else {
+                        // Optional: Stop speaking immediately if sound is disabled
+                        if synthesizer.isSpeaking {
+                             synthesizer.stopSpeaking(at: .immediate)
+                        }
                     }
                 }
             }
@@ -329,6 +354,32 @@ class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
             return nil
         }
         return depthValue
+    }
+
+    // --- Speech Function --- 
+    private func speakDistance(_ distance: Double) {
+        // Stop current speech immediately to prevent overlap
+        if synthesizer.isSpeaking {
+            synthesizer.stopSpeaking(at: .immediate)
+        }
+        
+        // Format distance string with one decimal place
+        let distanceString = String(format: "%.1f", distance)
+        
+        // Create the simple announcement string
+        let speechString = "\(distanceString) meters."
+        
+        print("Speaking: \(speechString)") // Log for debugging
+        
+        // Create and configure utterance
+        let utterance = AVSpeechUtterance(string: speechString)
+        // Adjust rate to be slightly slower than default for clarity
+        utterance.rate = AVSpeechUtteranceDefaultSpeechRate * 0.95 
+        utterance.volume = 1.0 // Max volume
+        // utterance.voice = AVSpeechSynthesisVoice(language: "en-US") // Optional: Specify voice
+        
+        // Speak the utterance
+        synthesizer.speak(utterance)
     }
 }
 
