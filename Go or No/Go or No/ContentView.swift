@@ -69,14 +69,19 @@ struct ContentView: View {
                 }) {
                     HStack {
                         Image(systemName: "eye.fill")
+                            .font(.title2) // Increased icon size
                         Text("Analyze")
+                            .fontWeight(.semibold) // Slightly bolder text
                     }
-                    .font(.headline)
-                    .padding()
+                    .font(.title3) // Increased text size
+                    .padding(.vertical, 15) // Increased vertical padding
+                    .padding(.horizontal, 20) // Increased horizontal padding
                     .frame(maxWidth: .infinity)
+                    .frame(minHeight: 150) // Ensure minimum height (increased further)
                     .background(viewModel.isAnalyzing ? Color.gray : Color.purple)
                     .foregroundColor(.white)
-                    .cornerRadius(15)
+                    .cornerRadius(20) // Slightly larger corner radius
+                    .shadow(color: .black.opacity(0.2), radius: 5, x: 0, y: 2) // Added shadow
                 }
                 .disabled(viewModel.isAnalyzing)
                 .padding(.horizontal)
@@ -89,14 +94,19 @@ struct ContentView: View {
                     }) {
                         HStack {
                             Image(systemName: viewModel.isRecording ? "mic.fill" : "mic")
+                                .font(.title2) // Increased icon size
                             Text(viewModel.isRecording ? "Stop Recording" : "Ask Follow-up")
+                                .fontWeight(.semibold) // Slightly bolder text
                         }
-                        .font(.headline)
-                        .padding()
+                        .font(.title3) // Increased text size
+                        .padding(.vertical, 15) // Increased vertical padding
+                        .padding(.horizontal, 20) // Increased horizontal padding
                         .frame(maxWidth: .infinity)
+                        .frame(minHeight: 150) // Ensure minimum height (increased further)
                         .background(viewModel.isRecording ? Color.red : Color.orange)
                         .foregroundColor(.white)
-                        .cornerRadius(15)
+                        .cornerRadius(20) // Slightly larger corner radius
+                        .shadow(color: .black.opacity(0.2), radius: 5, x: 0, y: 2) // Added shadow
                     }
                     .padding(.horizontal)
                     .padding(.bottom, 20)
