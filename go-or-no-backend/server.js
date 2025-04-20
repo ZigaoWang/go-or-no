@@ -1,6 +1,9 @@
 require('dotenv').config();
 const express = require('express');
 const OpenAI = require('openai');
+const fs = require('fs'); // File system module
+const path = require('path'); // Path module
+const os = require('os'); // OS module for temp directory
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -63,6 +66,82 @@ app.post('/describe-image', async (req, res) => {
     } catch (error) {
         console.error('Error calling OpenAI:', error);
         res.status(500).json({ error: 'Failed to get description from AI' });
+    }
+});
+
+// --- NEW Endpoint for Follow-up Questions ---
+app.post('/follow-up-analysis', async (req, res) => {
+    const { imageData, audioData } = req.body;
+
+    if (!imageData || !audioData) {
+        return res.status(400).json({ error: 'Missing imageData or audioData in request body' });
+    }
+
+    console.log('Received follow-up analysis request...');
+
+    let tempAudioPath = '';
+    try {
+        // 1. Decode audio and save temporarily
+        const audioBuffer = Buffer.from(audioData, 'base64');
+        // Create a unique temporary file path (e.g., in /tmp or os.tmpdir())
+        // Update expected extension to .wav
+        tempAudioPath = path.join(os.tmpdir(), `followup_${Date.now()}.wav`); 
+        fs.writeFileSync(tempAudioPath, audioBuffer);
+        console.log(`Temporary audio file saved to: ${tempAudioPath}`);
+
+        // 2. Transcribe audio using Whisper
+        console.log('Transcribing audio with Whisper...');
+        const transcription = await openai.audio.transcriptions.create({
+            file: fs.createReadStream(tempAudioPath),
+            model: "whisper-1",
+        });
+        const userQuestion = transcription.text;
+        console.log(`Transcription successful: "${userQuestion}"`);
+
+        // 3. Call GPT-4o with image context and transcribed question
+        console.log('Asking follow-up question to GPT-4o...');
+        const followUpResponse = await openai.chat.completions.create({
+            model: "gpt-4o",
+            messages: [
+                {
+                    role: "user",
+                    content: [
+                        {
+                            type: "text",
+                            // Prompt includes transcribed question
+                            text: `Based on the image, answer the following question concisely: "${userQuestion}"`
+                        },
+                        {
+                            type: "image_url",
+                            image_url: {
+                                "url": `data:image/jpeg;base64,${imageData}`,
+                            },
+                        },
+                    ],
+                },
+            ],
+            max_tokens: 100, // Limit follow-up answer length
+        });
+
+        console.log('GPT-4o follow-up response received.');
+        const answer = followUpResponse.choices[0]?.message?.content || "Could not get an answer.";
+
+        // 4. Send the answer back
+        res.json({ answer });
+
+    } catch (error) {
+        console.error('Error during follow-up analysis:', error);
+        res.status(500).json({ error: 'Failed to process follow-up question' });
+    } finally {
+        // 5. Clean up temporary audio file
+        if (tempAudioPath && fs.existsSync(tempAudioPath)) {
+            try {
+                fs.unlinkSync(tempAudioPath);
+                console.log(`Deleted temporary audio file: ${tempAudioPath}`);
+            } catch (cleanupError) {
+                console.error(`Error deleting temporary audio file ${tempAudioPath}:`, cleanupError);
+            }
+        }
     }
 });
 

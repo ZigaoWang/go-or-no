@@ -80,8 +80,29 @@ struct ContentView: View {
                 }
                 .disabled(viewModel.isAnalyzing)
                 .padding(.horizontal)
-                .padding(.bottom, 20)
-
+                .padding(.bottom, 5) // Reduced padding slightly
+                
+                // Follow-up Button (conditionally shown)
+                if viewModel.canAskFollowUp {
+                    Button(action: { 
+                        viewModel.handleFollowUpTap()
+                    }) {
+                        HStack {
+                            Image(systemName: viewModel.isRecording ? "mic.fill" : "mic")
+                            Text(viewModel.isRecording ? "Stop Recording" : "Ask Follow-up")
+                        }
+                        .font(.headline)
+                        .padding()
+                        .frame(maxWidth: .infinity)
+                        .background(viewModel.isRecording ? Color.red : Color.orange)
+                        .foregroundColor(.white)
+                        .cornerRadius(15)
+                    }
+                    .padding(.horizontal)
+                    .padding(.bottom, 20)
+                    .transition(.opacity.animation(.easeInOut))
+                }
+                
                 HStack(spacing: 20) { // Group toggles together
                     Button(action: {
                         viewModel.toggleVibration()
@@ -144,6 +165,8 @@ class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
     @Published var focusAreaSize: CGFloat = 0.50
     @Published var isAnalyzing: Bool = false // State for analysis button
     @Published var analysisResultText: String = "" // State for description display
+    @Published var canAskFollowUp: Bool = false // Flag to enable follow-up button
+    @Published var isRecording: Bool = false // State for recording button
 
     let arSession = ARSession()
     private var timer: Timer? = nil
@@ -159,6 +182,13 @@ class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
     private var latestFrame: ARFrame? = nil
     // Flag to prevent distance speech from interrupting analysis speech
     private var isSpeakingDescription: Bool = false 
+    // Store last analyzed image data for follow-up
+    private var lastAnalyzedImageData: Data? = nil 
+    
+    // Audio Recording Components
+    private let audioEngineForRecord = AVAudioEngine()
+    private var audioFileRecorder: AVAudioFile? = nil
+    private var recordingTapInstalled = false
     
     private let backendBaseURL = "https://api.go-or-no.zigao.wang"
     private let networkTimeout: TimeInterval = 15.0 // Timeout in seconds
@@ -166,20 +196,37 @@ class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
     override init() {
         super.init()
         synthesizer.delegate = self // Set delegate for speech finish detection
-        configureAudioSession()
+        // Configure audio session initially for playback
+        configureAudioSession(forPlayback: true) 
         setupARSession()
     }
 
     // Configure the shared AVAudioSession
-    private func configureAudioSession() {
+    private func configureAudioSession(forPlayback: Bool) {
+        // Stop engines before changing category
+        if audioEngineForRecord.isRunning { audioEngineForRecord.stop() }
+        // if audioEngine.isRunning { audioEngine.stop() } // If using separate engine for playback
+
         do {
             let audioSession = AVAudioSession.sharedInstance()
-            // Change category to .playback to ignore silent switch
-            try audioSession.setCategory(.playback, mode: .default, options: [.mixWithOthers]) // Allow mixing, ignore silent switch
+            if forPlayback {
+                // For speech synthesis
+                try audioSession.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+                print("Audio session configured for Playback.")
+            } else {
+                // For recording
+                try audioSession.setCategory(.record, mode: .measurement, options: [.duckOthers])
+                print("Audio session configured for Recording.")
+            }
             try audioSession.setActive(true)
-            print("Audio session configured for playback (ignores silent switch).")
+            
+            // Restart necessary engines after setting active
+            // if forPlayback && !audioEngine.isRunning { try audioEngine.start() } 
+            // If using separate playback engine
+            
         } catch {
-            print("ERROR: Failed to configure AVAudioSession: \\(error)")
+            print("ERROR: Failed to configure AVAudioSession: \(error)")
+            if !forPlayback { speak("Error setting up recorder.") }
         }
     }
 
@@ -227,6 +274,10 @@ class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
 
     func toggleSound() {
         soundEnabled.toggle()
+        if !soundEnabled && synthesizer.isSpeaking {
+            synthesizer.stopSpeaking(at: .immediate)
+            isSpeakingDescription = false
+        }
     }
 
     // Renamed function for clarity
@@ -446,22 +497,19 @@ class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
     
     // --- Image Analysis Function --- 
     func analyzeCurrentImage() {
-        guard !isAnalyzing else { return } // Prevent multiple requests
+        guard !isAnalyzing else { return } 
         guard let frame = latestFrame else {
-            // Ensure we don't interrupt if already speaking something important
             if !isSpeakingDescription { speak("Could not get camera view.") } 
             return
         }
         
-        // Explicitly stop any ongoing speech before starting analysis
-        if synthesizer.isSpeaking {
-            synthesizer.stopSpeaking(at: .immediate)
-            isSpeakingDescription = false // Reset flag if we stopped something
-        }
+        // Stop any current speech/recording before starting
+        stopAudioActivities()
         
         isAnalyzing = true
-        analysisResultText = "Analyzing..." // Update display text
-        speak("Analyzing scene...") // Provide initial feedback (not flagged as description)
+        canAskFollowUp = false // Disable follow-up during analysis
+        analysisResultText = "Analyzing..." 
+        speak("Analyzing scene...") 
         
         // Get image from frame
         let pixelBuffer = frame.capturedImage
@@ -469,7 +517,7 @@ class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
         let context = CIContext(options: nil)
         guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else {
             speak("Could not process image.")
-            analysisResultText = "Error processing image." // Update display text
+            analysisResultText = "Error processing image."
             isAnalyzing = false
             return
         }
@@ -480,10 +528,11 @@ class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
         guard let resizedImage = resizeImage(image: image, targetSize: targetSize), 
               let imageData = resizedImage.jpegData(compressionQuality: 0.7) else { // Use JPEG
             speak("Could not prepare image for analysis.")
-            analysisResultText = "Error preparing image." // Update display text
+            analysisResultText = "Error preparing image."
             isAnalyzing = false
             return
         }
+        self.lastAnalyzedImageData = imageData // Store image data for follow-up
         
         // Convert to base64
         let base64Image = imageData.base64EncodedString()
@@ -550,12 +599,15 @@ class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
                 
                 do {
                     let decodedResponse = try JSONDecoder().decode(DescriptionResponse.self, from: data)
-                    self?.analysisResultText = decodedResponse.description // Update display text
-                    self?.speak(decodedResponse.description, isDescription: true) // Speak the AI description, flagged as description
+                    self?.analysisResultText = decodedResponse.description 
+                    // Set canAskFollowUp only on successful description
+                    self?.canAskFollowUp = true 
+                    self?.speak(decodedResponse.description, isDescription: true) 
                 } catch {
                     print("JSON Decoding Error: \(error)")
                     self?.speak("Could not understand analysis response.")
                     self?.analysisResultText = "Error decoding response."
+                    self?.canAskFollowUp = false // Can't follow up on error
                 }
             }
         }
@@ -594,6 +646,279 @@ class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
         let speechString = "\(distanceString) meters."
         // Make sure to call speak with isDescription: false
         speak(speechString, isDescription: false) 
+    }
+
+    // --- Follow-up and Recording Logic --- 
+
+    func handleFollowUpTap() {
+        if isRecording {
+            stopRecordingAndAnalyze()
+        } else {
+            startRecording()
+        }
+    }
+
+    private func requestMicrophonePermission(completion: @escaping (Bool) -> Void) {
+        switch AVAudioSession.sharedInstance().recordPermission {
+        case .granted:
+            completion(true)
+        case .denied:
+            speak("Microphone access denied. Please enable it in Settings.")
+            completion(false)
+        case .undetermined:
+            AVAudioSession.sharedInstance().requestRecordPermission { granted in
+                DispatchQueue.main.async {
+                    if !granted {
+                        self.speak("Microphone access denied.")
+                    }
+                    completion(granted)
+                }
+            }
+        @unknown default:
+            completion(false)
+        }
+    }
+
+    private func startRecording() {
+        requestMicrophonePermission { [weak self] granted in
+            guard let self = self, granted else { 
+                self?.isRecording = false // Ensure UI state is correct
+                return 
+            }
+            
+            // Stop any ongoing speech
+            if self.synthesizer.isSpeaking { self.synthesizer.stopSpeaking(at: .immediate) }
+            self.isSpeakingDescription = false // Reset flag
+
+            // Configure session for recording
+            self.configureAudioSession(forPlayback: false)
+            
+            let inputNode = self.audioEngineForRecord.inputNode
+            // Use input node's format initially, but we'll override for WAV
+            // let recordingFormat = inputNode.outputFormat(forBus: 0)
+            
+            // --- Define WAV file format settings --- 
+            var wavSettings = inputNode.outputFormat(forBus: 0).settings
+            // Ensure Linear PCM format
+            wavSettings[AVFormatIDKey] = kAudioFormatLinearPCM
+            // Optional: Specify sample rate, bit depth if needed (often defaults work)
+            // wavSettings[AVSampleRateKey] = 44100.0
+            // wavSettings[AVNumberOfChannelsKey] = 1
+            // wavSettings[AVLinearPCMBitDepthKey] = 16 
+            // wavSettings[AVLinearPCMIsBigEndianKey] = false
+            // wavSettings[AVLinearPCMIsFloatKey] = false
+            // --- End WAV Settings ---
+            
+            // Define file path (using temporary directory with .wav extension)
+            let tempDir = FileManager.default.temporaryDirectory
+            let audioFilename = tempDir.appendingPathComponent("followup_recording.wav") // Changed extension
+            // Delete previous file if it exists
+            if FileManager.default.fileExists(atPath: audioFilename.path) {
+                try? FileManager.default.removeItem(at: audioFilename)
+            }
+
+            do {
+                // Create the audio file with WAV settings
+                self.audioFileRecorder = try AVAudioFile(forWriting: audioFilename, settings: wavSettings) // Use wavSettings
+                
+                // Install tap only if not already installed
+                if !self.recordingTapInstalled {
+                    // Get format matching the file settings for the tap
+                    guard let tapFormat = AVAudioFormat(settings: wavSettings) else {
+                        throw NSError(domain: "AudioFormatError", code: 1, userInfo: [NSLocalizedDescriptionKey: "Could not create AVAudioFormat for tap"]) 
+                    }
+                    inputNode.installTap(onBus: 0, bufferSize: 1024, format: tapFormat) { [weak self] (buffer, when) in
+                        do {
+                            // Ensure the buffer format matches the file format before writing
+                             guard buffer.format.settings[AVFormatIDKey] as? UInt32 == kAudioFormatLinearPCM else {
+                                 // Attempt conversion if formats don't match (might be lossy/fail)
+                                 print("Warning: Buffer format does not match WAV file format. Attempting conversion...")
+                                 if let converter = AVAudioConverter(from: buffer.format, to: tapFormat), 
+                                    let convertedBuffer = AVAudioPCMBuffer(pcmFormat: tapFormat, frameCapacity: buffer.frameCapacity) {
+                                     var error: NSError? = nil
+                                     converter.convert(to: convertedBuffer, error: &error, withInputFrom: { _, outStatus in
+                                         outStatus.pointee = .haveData
+                                         return buffer
+                                     })
+                                     if error == nil {
+                                         try self?.audioFileRecorder?.write(from: convertedBuffer)
+                                     } else {
+                                         print("Audio conversion error: \(error?.localizedDescription ?? "Unknown")")
+                                     }
+                                 } else {
+                                     print("Error: Could not create converter or converted buffer.")
+                                 }
+                                 return // Don't write original buffer if formats mismatch
+                             }
+                            // Formats match, write directly
+                            try self?.audioFileRecorder?.write(from: buffer)
+                        } catch {
+                            print("Error writing audio buffer: \(error)")
+                        }
+                    }
+                    self.recordingTapInstalled = true
+                }
+                
+                // Prepare and start the engine
+                self.audioEngineForRecord.prepare()
+                try self.audioEngineForRecord.start()
+                
+                DispatchQueue.main.async {
+                    self.isRecording = true
+                    self.speak("Recording started.")
+                }
+
+            } catch {
+                print("Error starting recording: \(error)")
+                 DispatchQueue.main.async {
+                     self.isRecording = false
+                     self.speak("Could not start recording.")
+                     // Revert audio session if recording fails
+                     self.configureAudioSession(forPlayback: true)
+                 }
+            }
+        }
+    }
+
+    private func stopRecordingAndAnalyze() {
+        guard isRecording else { return }
+        
+        isRecording = false // Update UI immediately
+        
+        // Stop audio engine and remove tap
+        audioEngineForRecord.stop()
+        if recordingTapInstalled {
+             audioEngineForRecord.inputNode.removeTap(onBus: 0)
+             recordingTapInstalled = false
+        }
+       
+        guard let recordingURL = audioFileRecorder?.url else {
+            print("Error: Recording URL is nil.")
+            speak("Failed to get recording.")
+            configureAudioSession(forPlayback: true) // Revert session
+            return
+        }
+        
+        // Invalidate file reference
+        audioFileRecorder = nil 
+        
+        // Reconfigure audio session for playback (for potential speech synthesis)
+        configureAudioSession(forPlayback: true)
+        speak("Recording stopped. Analyzing follow-up...")
+
+        // --- Prepare and Send Follow-up Request --- 
+        guard let lastImageData = lastAnalyzedImageData else {
+            speak("Could not get previous image context for follow-up.")
+            analysisResultText = "Missing image context."
+            return
+        }
+        
+        guard let audioData = try? Data(contentsOf: recordingURL) else {
+             speak("Could not read recording data.")
+             analysisResultText = "Error reading recording."
+             return
+        }
+        let base64Audio = audioData.base64EncodedString()
+        let base64Image = lastImageData.base64EncodedString()
+        
+        // Send request (similar structure to analyzeCurrentImage)
+        sendFollowUpRequest(imageData: base64Image, audioData: base64Audio)
+        
+        // Optionally delete the temp file now, or rely on OS cleanup
+        // try? FileManager.default.removeItem(at: recordingURL)
+    }
+
+    private func sendFollowUpRequest(imageData: String, audioData: String) {
+        isAnalyzing = true // Use the same flag to disable buttons
+        analysisResultText = "Analyzing follow-up..."
+        
+        guard let url = URL(string: "\(backendBaseURL)/follow-up-analysis") else {
+            speak("Invalid follow-up URL.")
+            analysisResultText = "Configuration error."
+            isAnalyzing = false
+            canAskFollowUp = true // Re-enable follow-up button on config error
+            return
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = networkTimeout * 2 // Allow longer for transcription+analysis
+        
+        let jsonBody: [String: String] = ["imageData": imageData, "audioData": audioData]
+        
+        do {
+            request.httpBody = try JSONEncoder().encode(jsonBody)
+        } catch {
+            speak("Failed to encode follow-up request.")
+            analysisResultText = "Error encoding request."
+            isAnalyzing = false
+            canAskFollowUp = true // Re-enable follow-up button
+            return
+        }
+        
+        let task = URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+            DispatchQueue.main.async {
+                self?.isAnalyzing = false
+                self?.canAskFollowUp = true // Re-enable follow-up button after completion
+                
+                if let error = error {
+                     if (error as NSError).code == NSURLErrorTimedOut {
+                         self?.speak("Follow-up analysis timed out.")
+                         self?.analysisResultText = "Follow-up timed out."
+                     } else {
+                         self?.speak("Error with follow-up analysis.")
+                         self?.analysisResultText = "Network error during follow-up."
+                     }
+                     return
+                 }
+                 
+                 guard let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) else {
+                     self?.speak("Server error during follow-up.")
+                     self?.analysisResultText = "Server error during follow-up."
+                     return
+                 }
+                 
+                 guard let data = data else {
+                     self?.speak("No answer received for follow-up.")
+                     self?.analysisResultText = "No answer received."
+                     return
+                 }
+                 
+                 // Decode JSON response (assuming { "answer": "..." })
+                 struct AnswerResponse: Decodable {
+                     let answer: String
+                 }
+                 
+                 do {
+                     let decodedResponse = try JSONDecoder().decode(AnswerResponse.self, from: data)
+                     // Prepend question context? Maybe not needed if answer is direct.
+                     let resultText = "Follow-up: \n" + decodedResponse.answer
+                     self?.analysisResultText = resultText
+                     self?.speak(decodedResponse.answer, isDescription: true) // Speak the follow-up answer
+                 } catch {
+                     self?.speak("Could not understand follow-up answer.")
+                     self?.analysisResultText = "Error decoding answer."
+                 }
+            }
+        }
+        task.resume()
+    }
+    
+    // Helper to stop all audio activities
+    private func stopAudioActivities() {
+        if synthesizer.isSpeaking { synthesizer.stopSpeaking(at: .immediate) }
+        if audioEngineForRecord.isRunning { 
+            audioEngineForRecord.stop()
+            if recordingTapInstalled { 
+                 audioEngineForRecord.inputNode.removeTap(onBus: 0)
+                 recordingTapInstalled = false
+            }
+        }
+        isSpeakingDescription = false
+        isRecording = false
+        // Ensure session is back to playback after stopping everything
+        configureAudioSession(forPlayback: true)
     }
 }
 
