@@ -69,7 +69,7 @@ struct ContentView: View {
                 }) {
                     HStack {
                         Image(systemName: "eye.fill")
-                        Text("Analyze Scene")
+                        Text("Analyze")
                     }
                     .font(.headline)
                     .padding()
@@ -448,8 +448,15 @@ class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
     func analyzeCurrentImage() {
         guard !isAnalyzing else { return } // Prevent multiple requests
         guard let frame = latestFrame else {
-            speak("Could not get camera view.")
+            // Ensure we don't interrupt if already speaking something important
+            if !isSpeakingDescription { speak("Could not get camera view.") } 
             return
+        }
+        
+        // Explicitly stop any ongoing speech before starting analysis
+        if synthesizer.isSpeaking {
+            synthesizer.stopSpeaking(at: .immediate)
+            isSpeakingDescription = false // Reset flag if we stopped something
         }
         
         isAnalyzing = true
