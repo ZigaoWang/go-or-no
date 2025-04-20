@@ -249,29 +249,30 @@ class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
                         self.feedbackGenerator.impactOccurred()
                     }
 
-                    // Trigger Distance Speech if enabled AND description isn't speaking
-                    if self.soundEnabled && !self.isSpeakingDescription { // Check flag BEFORE attempting to speak distance
-                        // --- Simplified Speech Throttling Logic --- 
+                    // --- Distance Speech Logic --- 
+                    // Check if sound is enabled for distance, AND if the synthesizer is currently silent,
+                    // AND if we are not intentionally speaking a long description.
+                    if self.soundEnabled && !self.synthesizer.isSpeaking && !self.isSpeakingDescription { 
                         let now = Date()
                         let enoughTimePassed = now.timeIntervalSince(self.lastSpeechTime) > self.speechThrottleInterval
                         
-                        // Speak only if enough time has passed since the last announcement
-                        if enoughTimePassed {
+                        // Speak distance only if enough time has passed since the last speech
+                        if enoughTimePassed { 
                             let currentDistanceToSpeak = self.currentDistance 
                             if abs(currentDistanceToSpeak - self.lastSpokenDistance) > 0.05 || self.lastSpokenDistance < 0 {
-                                // Pass the current isSpeakingDescription state to speakDistance, though speak() will re-check
                                 self.speakDistance(currentDistanceToSpeak)
                                 self.lastSpokenDistance = currentDistanceToSpeak
                                 self.lastSpeechTime = now
                             }
                         } 
-                        // --- End Speech Throttling --- 
-                    } else if !self.soundEnabled {
-                        // Optional: Stop speaking immediately if sound is disabled
-                        if synthesizer.isSpeaking {
-                             synthesizer.stopSpeaking(at: .immediate)
-                             self.isSpeakingDescription = false // Ensure flag is reset if speech is cut off
-                        }
+                    } 
+                    // --- End Distance Speech Logic ---
+                    
+                    // Logic to stop synthesizer if sound toggle is disabled (moved outside the distance speech block)
+                    else if !self.soundEnabled && self.synthesizer.isSpeaking {
+                         self.synthesizer.stopSpeaking(at: .immediate)
+                         // Ensure flag is reset if speech is cut off by disabling sound
+                         self.isSpeakingDescription = false 
                     }
                 }
             }
