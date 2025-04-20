@@ -37,7 +37,7 @@ app.post('/describe-image', async (req, res) => {
                     content: [
                         { 
                             type: "text", 
-                            text: "Analyze this scene for a visually impaired user walking. Describe ONLY critical obstacles, hazards, or essential navigation elements (like stairs, doors, pathways) immediately ahead. Be extremely concise. Omit colors, materials, decorative details, and anything not crucial for safe navigation in the next few steps."
+                            text: "You are assisting a visually impaired user who is walking. Describe the immediate path ahead concisely (max 2-3 short sentences), focusing ONLY on safety and navigation. Identify the most important obstacle or navigation feature (e.g., 'Wall 1 meter ahead', 'Clear path', 'Stairs descending', 'Crosswalk ahead'). Mention secondary relevant features briefly if necessary for context (e.g., 'Person approaching on the left', 'Doorway on the right'). Omit cosmetic details like colors and materials."
                         },
                         {
                             type: "image_url",
