@@ -11,6 +11,7 @@ import Vision
 import VisionKit
 import ARKit
 import UIKit
+import AudioToolbox // Import for System Sounds
 
 struct ContentView: View {
     @StateObject private var viewModel = CameraViewModel()
@@ -66,7 +67,7 @@ struct ContentView: View {
                 // Analyze Button - REMOVED
                 
                 // Follow-up Button (Renamed and always shown)
-                Button(action: { 
+                    Button(action: {
                     viewModel.handleFollowUpTap()
                 }) {
                     HStack {
@@ -127,9 +128,6 @@ class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
     // Speech Synthesis (Only for descriptions/errors now)
     private let synthesizer = AVSpeechSynthesizer()
     
-    // Audio Player for Beep sound
-    private var beepPlayer: AVAudioPlayer? = nil
-    
     // Store the latest frame for analysis
     private var latestFrame: ARFrame? = nil
     // Flag to prevent distance speech from interrupting analysis speech
@@ -150,20 +148,6 @@ class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
     override init() {
         super.init()
         synthesizer.delegate = self // Set delegate for speech finish detection
-        
-        // Load the beep sound
-        if let beepSoundURL = Bundle.main.url(forResource: "beep", withExtension: "wav") {
-            do {
-                beepPlayer = try AVAudioPlayer(contentsOf: beepSoundURL)
-                beepPlayer?.prepareToPlay()
-                print("Beep sound loaded successfully.")
-            } catch {
-                print("ERROR: Could not load beep sound file: \(error)")
-                beepPlayer = nil
-            }
-        } else {
-            print("ERROR: Beep sound file (beep.wav) not found in bundle.")
-        }
         
         // Configure audio session initially for playback
         configureAudioSession(forPlayback: true) 
@@ -254,12 +238,6 @@ class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
                 if isVeryClose || shouldTriggerRegular {
                     // Trigger Vibration (always enabled)
                     self.feedbackGenerator.impactOccurred()
-
-                    // Play beep sound synchronized with haptic feedback
-                    if let player = self.beepPlayer {
-                        player.currentTime = 0 // Rewind to start
-                        player.play()
-                    }
                 }
             }
         }
@@ -586,10 +564,10 @@ class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
                                      })
                                      if error == nil {
                                          try self?.audioFileRecorder?.write(from: convertedBuffer)
-                                     } else {
+                } else {
                                          print("Audio conversion error: \(error?.localizedDescription ?? "Unknown")")
-                                     }
-                                 } else {
+                }
+            } else {
                                      print("Error: Could not create converter or converted buffer.")
                                  }
                                  return // Don't write original buffer if formats mismatch
@@ -609,7 +587,8 @@ class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
                 
                 DispatchQueue.main.async {
                     self.isRecording = true
-                    self.speak("Recording started.")
+                    // Play system sound for recording start
+                    AudioServicesPlaySystemSound(1113) // Play 'begin_record' sound
                 }
 
             } catch {
@@ -648,7 +627,8 @@ class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
         
         // Reconfigure audio session for playback (for potential speech synthesis)
         configureAudioSession(forPlayback: true)
-        speak("Recording stopped. Analyzing follow-up...")
+        // Play system sound for recording stop
+        AudioServicesPlaySystemSound(1114) // Play 'end_record' sound
 
         // --- Prepare and Send Follow-up Request --- 
         guard let lastImageData = lastAnalyzedImageData else {
