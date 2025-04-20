@@ -73,7 +73,7 @@ struct ContentView: View {
                         Text("Analyze")
                             .fontWeight(.semibold) // Slightly bolder text
                     }
-                    .font(.title3) // Increased text size
+                    .font(.title2) // Increased text size further
                     .padding(.vertical, 15) // Increased vertical padding
                     .padding(.horizontal, 20) // Increased horizontal padding
                     .frame(maxWidth: .infinity)
@@ -98,7 +98,7 @@ struct ContentView: View {
                             Text(viewModel.isRecording ? "Stop Recording" : "Ask Follow-up")
                                 .fontWeight(.semibold) // Slightly bolder text
                         }
-                        .font(.title3) // Increased text size
+                        .font(.title2) // Increased text size further
                         .padding(.vertical, 15) // Increased vertical padding
                         .padding(.horizontal, 20) // Increased horizontal padding
                         .frame(maxWidth: .infinity)
