@@ -37,7 +37,7 @@ app.post('/describe-image', async (req, res) => {
                     content: [
                         { 
                             type: "text", 
-                            text: "You are assisting a visually impaired user. Describe the main objects and any text visible in this image concisely. Focus on identification and function. Omit visual details like color and texture unless essential for identifying the object (e.g., differentiating products)."
+                            text: "You are assisting a visually impaired user. Describe the main objects and any text visible in this image concisely. Focus on identification and function. Omit visual details like color and texture unless essential for identifying the object (e.g., differentiating products). Keep your answer short and concise."
                         },
                         {
                             type: "image_url",
