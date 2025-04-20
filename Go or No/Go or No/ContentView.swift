@@ -63,55 +63,34 @@ struct ContentView: View {
                 
                 Spacer()
 
-                // Analyze Button
+                // Analyze Button - REMOVED
+                
+                // Follow-up Button (Renamed and always shown)
                 Button(action: { 
-                    viewModel.analyzeCurrentImage()
+                    viewModel.handleFollowUpTap()
                 }) {
                     HStack {
-                        Image(systemName: "eye.fill")
-                            .font(.title2) // Increased icon size
-                        Text("Analyze")
-                            .fontWeight(.semibold) // Slightly bolder text
+                        Image(systemName: viewModel.isRecording ? "mic.fill" : "mic")
+                            .font(.title2) // Icon size kept
+                        Text(viewModel.isRecording ? "Stop Recording" : "Ask Question") // Renamed Text
+                            .fontWeight(.semibold) 
                     }
-                    .font(.largeTitle) // Increased text size to largeTitle
-                    .padding(.vertical, 15) // Increased vertical padding
-                    .padding(.horizontal, 20) // Increased horizontal padding
+                    .font(.largeTitle) // Text size kept
+                    .padding(.vertical, 15) 
+                    .padding(.horizontal, 20) 
                     .frame(maxWidth: .infinity)
-                    .frame(minHeight: 150) // Ensure minimum height (increased further)
-                    .background(viewModel.isAnalyzing ? Color.gray : Color.purple)
+                    .frame(minHeight: 150) 
+                    // Background color now only depends on recording state
+                    .background(viewModel.isRecording ? Color.red : Color.orange) 
                     .foregroundColor(.white)
-                    .cornerRadius(20) // Slightly larger corner radius
-                    .shadow(color: .black.opacity(0.2), radius: 5, x: 0, y: 2) // Added shadow
+                    .cornerRadius(20) 
+                    .shadow(color: .black.opacity(0.2), radius: 5, x: 0, y: 2) 
                 }
-                .disabled(viewModel.isAnalyzing)
+                // Button disabled while recording OR while analyzing the follow-up
+                .disabled(viewModel.isAnalyzing) 
                 .padding(.horizontal)
-                .padding(.bottom, 5) // Reduced padding slightly
-                
-                // Follow-up Button (conditionally shown)
-                if viewModel.canAskFollowUp {
-                    Button(action: { 
-                        viewModel.handleFollowUpTap()
-                    }) {
-                        HStack {
-                            Image(systemName: viewModel.isRecording ? "mic.fill" : "mic")
-                                .font(.title2) // Increased icon size
-                            Text(viewModel.isRecording ? "Stop Recording" : "Ask Follow-up")
-                                .fontWeight(.semibold) // Slightly bolder text
-                        }
-                        .font(.largeTitle) // Increased text size to largeTitle
-                        .padding(.vertical, 15) // Increased vertical padding
-                        .padding(.horizontal, 20) // Increased horizontal padding
-                        .frame(maxWidth: .infinity)
-                        .frame(minHeight: 150) // Ensure minimum height (increased further)
-                        .background(viewModel.isRecording ? Color.red : Color.orange)
-                        .foregroundColor(.white)
-                        .cornerRadius(20) // Slightly larger corner radius
-                        .shadow(color: .black.opacity(0.2), radius: 5, x: 0, y: 2) // Added shadow
-                    }
-                    .padding(.horizontal)
-                    .padding(.bottom, 20)
-                    .transition(.opacity.animation(.easeInOut))
-                }
+                .padding(.bottom, 20)
+                .transition(.opacity.animation(.easeInOut))
             }
         }
         .onAppear {
@@ -140,7 +119,6 @@ class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
     @Published var focusAreaSize: CGFloat = 0.50
     @Published var isAnalyzing: Bool = false // State for analysis button
     @Published var analysisResultText: String = "" // State for description display
-    @Published var canAskFollowUp: Bool = false // Flag to enable follow-up button
     @Published var isRecording: Bool = false // State for recording button
 
     let arSession = ARSession()
@@ -275,7 +253,9 @@ class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
                         if enoughTimePassed { 
                             let currentDistanceToSpeak = self.currentDistance 
                             if abs(currentDistanceToSpeak - self.lastSpokenDistance) > 0.05 || self.lastSpokenDistance < 0 {
-                                self.speakDistance(currentDistanceToSpeak)
+                                // Updated call to use generic speak function
+                                let distanceString = String(format: "%.1f", currentDistanceToSpeak)
+                                self.speak("\(distanceString) meters.", isDescription: false) 
                                 self.lastSpokenDistance = currentDistanceToSpeak
                                 self.lastSpeechTime = now
                             }
@@ -455,128 +435,11 @@ class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
         synthesizer.speak(utterance)
     }
     
-    // --- Image Analysis Function --- 
-    func analyzeCurrentImage() {
-        guard !isAnalyzing else { return } 
-        guard let frame = latestFrame else {
-            if !isSpeakingDescription { speak("Could not get camera view.") } 
-            return
-        }
-        
-        // Stop audio, reset state
-        stopAudioActivities()
-        isAnalyzing = true
-        canAskFollowUp = false 
-        analysisResultText = "Analyzing..." 
-        lastAnalysisDescription = nil // Clear previous context before new analysis
-        speak("Analyzing scene...") 
-        
-        // Get image from frame
-        let pixelBuffer = frame.capturedImage
-        let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
-        let context = CIContext(options: nil)
-        guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else {
-            speak("Could not process image.")
-            analysisResultText = "Error processing image."
-            isAnalyzing = false
-            return
-        }
-        let image = UIImage(cgImage: cgImage)
-        
-        // Resize image for faster upload (Reduced size further)
-        let targetSize = CGSize(width: 512, height: 384) 
-        guard let resizedImage = resizeImage(image: image, targetSize: targetSize), 
-              let imageData = resizedImage.jpegData(compressionQuality: 0.7) else { // Use JPEG
-            speak("Could not prepare image for analysis.")
-            analysisResultText = "Error preparing image."
-            isAnalyzing = false
-            return
-        }
-        self.lastAnalyzedImageData = imageData // Store image data
-        
-        // Convert to base64
-        let base64Image = imageData.base64EncodedString()
-        
-        // --- Network Request (Original Analysis) --- 
-        guard let url = URL(string: "\(backendBaseURL)/describe-image") else {
-            speak("Invalid backend URL.")
-            analysisResultText = "Configuration error."
-            isAnalyzing = false
-            return
-        }
-        
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = networkTimeout // Set request timeout
-        
-        let jsonBody: [String: String] = ["imageData": base64Image]
-        
-        do {
-            request.httpBody = try JSONEncoder().encode(jsonBody)
-        } catch {
-            speak("Failed to encode request.")
-            analysisResultText = "Error encoding request."
-            isAnalyzing = false
-            return
-        }
-        
-        let task = URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
-            DispatchQueue.main.async {
-                self?.isAnalyzing = false
-                
-                if let error = error {
-                    // Handle specific timeout error
-                    if (error as NSError).code == NSURLErrorTimedOut {
-                        print("Network Error: Request timed out.")
-                        self?.speak("Analysis timed out. Please try again.")
-                        self?.analysisResultText = "Analysis timed out."
-                    } else {
-                        print("Network Error: \(error.localizedDescription)")
-                        self?.speak("Error analyzing scene. Check network connection.") // More specific error
-                        self?.analysisResultText = "Network error."
-                    }
-                    self?.canAskFollowUp = false
-                    return
-                }
-                
-                guard let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) else {
-                    print("Server Error: \(response.debugDescription)")
-                    self?.speak("Error analyzing scene: Server issue.")
-                    self?.analysisResultText = "Server error."
-                    self?.canAskFollowUp = false
-                    return
-                }
-                
-                guard let data = data else {
-                    self?.speak("No description received.")
-                    self?.analysisResultText = "No description received."
-                    self?.canAskFollowUp = false
-                    return
-                }
-                
-                // Decode JSON response
-                struct DescriptionResponse: Decodable { let description: String }
-                do {
-                    let decodedResponse = try JSONDecoder().decode(DescriptionResponse.self, from: data)
-                    self?.analysisResultText = decodedResponse.description 
-                    self?.lastAnalysisDescription = decodedResponse.description // <-- STORE description text
-                    self?.canAskFollowUp = true // <-- ENABLE follow-up
-                    self?.speak(decodedResponse.description, isDescription: true) 
-                } catch {
-                    print("JSON Decoding Error: \(error)")
-                    self?.speak("Could not understand analysis response.")
-                    self?.analysisResultText = "Error decoding response."
-                    self?.canAskFollowUp = false // Ensure follow-up is disabled on decode error
-                }
-            }
-        }
-        task.resume()
-    }
-    
-    // --- Helper Functions --- 
-    
-    // Simple image resizing helper
+    // --- Image Analysis Function --- REMOVED
+    // func analyzeCurrentImage() { ... } 
+
+    // --- Helper Functions ---
+    // Restoring resizeImage as it's needed by startRecording
     private func resizeImage(image: UIImage, targetSize: CGSize) -> UIImage? {
         let size = image.size
         
@@ -598,14 +461,6 @@ class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
         UIGraphicsEndImageContext()
         
         return newImage
-    }
-    
-    // Renamed speakDistance to use generic speak function
-    private func speakDistance(_ distance: Double) {
-        let distanceString = String(format: "%.1f", distance)
-        let speechString = "\(distanceString) meters."
-        // Make sure to call speak with isDescription: false
-        speak(speechString, isDescription: false) 
     }
 
     // --- Follow-up and Recording Logic --- 
@@ -646,6 +501,40 @@ class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
                 return 
             }
             
+            // --- Capture Current Image for Context --- 
+            guard let frame = self.latestFrame else {
+                self.speak("Could not get camera view for context.")
+                // Don't proceed if we can't get a frame
+                self.isRecording = false // Ensure UI state reflects failure
+                return
+            }
+            let pixelBuffer = frame.capturedImage
+            let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+            let context = CIContext(options: nil)
+            guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else {
+                self.speak("Could not process image context.")
+                self.isRecording = false // Ensure UI state reflects failure
+                return
+            }
+            let image = UIImage(cgImage: cgImage)
+            guard let resizedImage = self.resizeImage(image: image, targetSize: CGSize(width: 1024, height: 1024)) else {
+                self.speak("Could not prepare image context.")
+                self.isRecording = false // Ensure UI state reflects failure
+                return
+            }
+            guard let imageData = resizedImage.jpegData(compressionQuality: 0.7) else { 
+                self.speak("Could not prepare image context.")
+                self.isRecording = false // Ensure UI state reflects failure
+                return
+            }
+            self.lastAnalyzedImageData = imageData // Store fresh image data
+            // Set initial context ONLY if it's currently nil (i.e., first question)
+            if self.lastAnalysisDescription == nil {
+                self.lastAnalysisDescription = "User is asking the first question about the current scene."
+            }
+            // --- End Image Capture ---
+            
+            // --- Start Audio Recording ONLY if image context is valid --- 
             // Stop any ongoing speech
             if self.synthesizer.isSpeaking { self.synthesizer.stopSpeaking(at: .immediate) }
             self.isSpeakingDescription = false // Reset flag
@@ -789,16 +678,14 @@ class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
     }
 
     private func sendFollowUpRequest(imageData: String, audioData: String) {
-        isAnalyzing = true // Use the same flag to disable buttons
-        canAskFollowUp = false // Disable follow-up during analysis
-        analysisResultText = "Analyzing follow-up..."
+        isAnalyzing = true // Use this flag to disable button during processing
+        analysisResultText = "Analyzing question..."
         
         // Retrieve the last successful description for context
         guard let previousDescription = lastAnalysisDescription else {
             speak("Missing context from previous analysis.")
             analysisResultText = "Error: Missing context."
             isAnalyzing = false
-            canAskFollowUp = true // Re-enable follow-up
             return
         }
         
@@ -806,7 +693,6 @@ class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
             speak("Invalid follow-up URL.")
             analysisResultText = "Configuration error."
             isAnalyzing = false
-            canAskFollowUp = true // Re-enable follow-up button on config error
             return
         }
         
@@ -827,14 +713,12 @@ class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
             speak("Failed to encode follow-up request.")
             analysisResultText = "Error encoding request."
             isAnalyzing = false
-            canAskFollowUp = true // Re-enable follow-up button
             return
         }
         
         let task = URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
             DispatchQueue.main.async {
                 self?.isAnalyzing = false
-                self?.canAskFollowUp = true // Re-enable follow-up button after completion
                 
                 if let error = error {
                      if (error as NSError).code == NSURLErrorTimedOut {
@@ -867,7 +751,7 @@ class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
                  do {
                      let decodedResponse = try JSONDecoder().decode(AnswerResponse.self, from: data)
                      // Prepend question context? Maybe not needed if answer is direct.
-                     let resultText = "Follow-up: \n" + decodedResponse.answer
+                     let resultText = "Answer: \n" + decodedResponse.answer
                      self?.analysisResultText = resultText
                      self?.lastAnalysisDescription = decodedResponse.answer // Store the new answer as the latest description for potential further follow-ups?
                      self?.speak(decodedResponse.answer, isDescription: true) // Speak the follow-up answer
