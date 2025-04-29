@@ -1,5 +1,11 @@
 # Go or No
 
+  <a href="https://apps.apple.com/us/app/go-or-no/id6744859953?itscg=30200&itsct=apps_box_badge&mttnsubad=6744859953" style="display: inline-block;">
+    <img src="https://toolbox.marketingtools.apple.com/api/v2/badges/download-on-the-app-store/black/en-us?releaseDate=1745884800" alt="Download on the App Store" style="width: 246px; height: 82px; vertical-align: middle; object-fit: contain;" />
+    </a>
+    
+
+
 
 https://github.com/user-attachments/assets/2ae2a964-efd7-4a49-b776-04adf8503d65
 
