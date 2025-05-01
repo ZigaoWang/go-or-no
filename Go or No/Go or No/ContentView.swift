@@ -12,6 +12,7 @@ import VisionKit
 import ARKit
 import UIKit
 import AudioToolbox // Import for System Sounds
+import NaturalLanguage
 
 struct ContentView: View {
     @StateObject private var viewModel = CameraViewModel()
@@ -365,11 +366,11 @@ class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
         return depthValue
     }
 
-    // --- Speech Function --- 
+    // --- Speech Function ---
     // Modified to potentially speak descriptions too
     private func speak(_ text: String, isDescription: Bool = false) { // Added flag parameter
-        
-        // --- Interruption Logic --- 
+
+        // --- Interruption Logic ---
         // ONLY interrupt if the NEW speech is a description.
         // Do NOT interrupt an ongoing description for a distance update.
         if isDescription { // Only descriptions can interrupt.
@@ -377,18 +378,18 @@ class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
                 print("Interrupting current speech for new description.")
                 synthesizer.stopSpeaking(at: .immediate)
                 // Explicitly reset flag here since we are interrupting
-                isSpeakingDescription = false 
+                isSpeakingDescription = false
             }
             // Set flag because this new speech IS a description
             isSpeakingDescription = true
-        } else { 
+        } else {
             // If this new speech is NOT a description, check if a description is ALREADY playing.
             if isSpeakingDescription {
                 // A description is playing, ignore this non-description speech.
                 print("Ignoring non-description speech while description is active: \(text)")
-                return 
-            } 
-            // If no description is playing, it's okay to potentially interrupt 
+                return
+            }
+            // If no description is playing, it's okay to potentially interrupt
             // whatever non-description might be playing (e.g. another distance).
             // (Though this case is less likely with current throttling)
              if synthesizer.isSpeaking {
@@ -396,16 +397,43 @@ class CameraViewModel: NSObject, ObservableObject, ARSessionDelegate {
              }
         }
         // --- End Interruption Logic ---
-        
+
         print("Speaking: \(text)") // Log for debugging
-        
+
+        // --- Language Detection and Voice Selection ---
+        let recognizer = NLLanguageRecognizer()
+        recognizer.processString(text)
+        guard let languageCode = recognizer.dominantLanguage?.rawValue else {
+            // Use default voice if language cannot be determined
+            let utterance = AVSpeechUtterance(string: text)
+            utterance.rate = AVSpeechUtteranceDefaultSpeechRate * 0.95
+            utterance.volume = 1.0
+            synthesizer.speak(utterance)
+            print("Could not determine language, using default voice.")
+            return
+        }
+
+        // Find a voice for the detected language code
+        let voice = AVSpeechSynthesisVoice(language: languageCode)
+
         // Create and configure utterance
         let utterance = AVSpeechUtterance(string: text)
+        utterance.voice = voice // Set the detected language voice
         utterance.rate = AVSpeechUtteranceDefaultSpeechRate * 0.95 // Keep slightly slower rate
         utterance.volume = 1.0 // Max volume
-        
+
         // Speak the utterance
-        synthesizer.speak(utterance)
+        if voice != nil {
+            print("Using voice for language: \(languageCode)")
+            synthesizer.speak(utterance)
+        } else {
+            // Fallback to default voice if no specific voice found for the language
+            print("No specific voice found for language \(languageCode), using default voice.")
+            let defaultUtterance = AVSpeechUtterance(string: text)
+            defaultUtterance.rate = AVSpeechUtteranceDefaultSpeechRate * 0.95
+            defaultUtterance.volume = 1.0
+            synthesizer.speak(defaultUtterance)
+        }
     }
     
     // --- Image Analysis Function --- REMOVED
